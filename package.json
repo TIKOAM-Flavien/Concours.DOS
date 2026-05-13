@@ -1,0 +1,28 @@
+{
+  "name": "depot-pieces-concours-archi",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently --names api,vite --prefix-colors cyan,magenta \"npm run dev:server\" \"vite\"",
+    "dev:server": "node server/index.js",
+    "dev:vite": "vite",
+    "prebuild:all": "node scripts/check-public-env.mjs",
+    "build:all": "vite build --mode all --outDir dist-all",
+    "check": "npm run build:all",
+    "audit:prod": "npm audit --omit=dev",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "vite": "^8.0.8"
+  }
+}

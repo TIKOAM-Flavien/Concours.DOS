@@ -1,0 +1,86 @@
+# Guide d'exploitation
+
+## Workflow admin
+
+1. Ouvrir `http://localhost:3001/admin` depuis l'hote serveur.
+2. Creer un projet avec `name`, `dossierId`, `folderPath`, et eventuellement
+   `deadline`.
+3. Ajouter les entreprises invitees avec leurs pieces attendues.
+4. Generer le lien signe pour chaque entreprise.
+5. Suivre la reception dans le tableau de bord et relancer si necessaire.
+
+## Base de donnees
+
+- Moteur: SQLite (`better-sqlite3`).
+- Emplacement par defaut: `server/admin.db`.
+- Emplacement configurable: `PORTAL_ADMIN_DB_PATH`.
+
+Sauvegarde:
+
+1. Arreter le service.
+2. Sauvegarder `admin.db`, `admin.db-wal`, `admin.db-shm`.
+3. Redemarrer le service.
+
+## Sante de service
+
+- `GET /health`: verifie que le process repond.
+- `GET /readyz`: verifie build, secret et flows critiques.
+
+Si `readyz` retourne `503`, corriger le point remonte avant de rouvrir le
+service.
+
+## Rotation du secret de signature
+
+1. Remplacer `PORTAL_LINK_SECRET`.
+2. Redemarrer le serveur.
+3. Regenerer les liens d'invitation existants.
+
+Effet attendu:
+
+- les anciens liens ne sont plus valides ;
+- les nouveaux liens generes depuis l'admin deviennent la source de verite.
+
+## Expiration et revocation des liens
+
+- Les liens signes portent une date d'expiration `exp`.
+- Par defaut (si `PORTAL_LINK_TTL_MINUTES` n'est pas defini), la validite est de **30 jours**.
+- Un plafond est applique a `ttlMinutes` cote serveur: `PORTAL_LINK_TTL_MAX_MINUTES` (defaut **525600** = 1 an). Toute valeur superieure est tronquee.
+- `ttlMinutes = 0` (ou negatif) est refuse (HTTP 400) pour eviter les liens sans expiration.
+- Un lien peut etre revoque a tout moment cote serveur (liste de revocation SQLite). La revocation reste possible apres `exp` (utile pour tracer un lien divulgue tardivement).
+
+API admin (locale uniquement):
+
+- `POST /api/admin/invitations/sign` avec `context` et `ttlMinutes` (optionnel, borne par le plafond ci-dessus).
+- `POST /api/admin/invitations/revoke` avec `ctx`, `sig`, `alg` (optionnel, defaut `HS256`) et `reason` (optionnel).
+- `GET /api/admin/invitations/revoked?limit=50` pour lister les liens revoques.
+- `POST /api/admin/maintenance/cleanup` pour declencher manuellement la purge des liens revoques expires (>30j apres `exp`) et l'effacement du champ `payload` des entrees d'audit de plus de 90 jours. Le `payloadHash` est conserve.
+
+## Limitation du debit (`rate limit`)
+
+- Deux buckets en memoire (express-rate-limit, fenetre de 60s):
+  - `/api/portal/*` (hors `/upload`): `PORTAL_RATE_LIMIT_PER_MINUTE` (defaut 60).
+  - `/api/portal/upload`: `PORTAL_UPLOAD_RATE_LIMIT_PER_MINUTE` (defaut 10). Ce bucket **ne** deduit **pas** du bucket general.
+- Budget quotidien par `submissionId` (stocke en SQLite): `PORTAL_SUBMISSION_DAILY_BUDGET` (defaut 300). Un appel reussi consomme 1-2 unites; un echec cote Power Automate n'est **pas** debite (bump post-succes).
+- Les appels Power Automate sont bornes par `PORTAL_FLOW_TIMEOUT_MS` (defaut 120000 ms) pour eviter qu'une requete portail reste bloquee indefiniment.
+- **Limitation connue (N-07):** le store des deux limiters est en memoire (`MemoryStore` par defaut). Il est remis a zero a chaque redemarrage et n'est **pas partage** entre instances. Pour un deploiement multi-process ou multi-host, substituer un store partage (Redis, Memcached) ou un reverse proxy avec limitation native.
+
+## Depannage rapide
+
+| Symptome | Cause probable | Action |
+| --- | --- | --- |
+| `403` sur `/depot` | lien invalide, expire, incomplet ou revoque | regenerer le lien depuis l'admin |
+| `503` sur `/admin` ou `/depot` | build absent | lancer `npm run build:all` |
+| `GET /readyz` en erreur | secret ou flow critique manquant | corriger l'env serveur |
+| echec upload/update/delete | flow Power Automate indisponible ou trop lent | verifier l'URL du flow, son historique d'execution et `PORTAL_FLOW_TIMEOUT_MS` |
+| preview indisponible | flow download absent | configurer `POWER_AUTOMATE_DOWNLOAD_FILE_URL` |
+| entreprise non suivie dans l'admin | colonnes SharePoint non mappees | verifier `Type_piece`, `Entreprise_depot`, `Projet` |
+
+## Journaux
+
+Le serveur logge:
+
+- les erreurs applicatives non attrapees ;
+- les warnings de configuration au demarrage ;
+- les echecs de verification ou d'appel de flow quand ils remontent.
+
+Pour la production, brancher ces logs sur un collecteur central si possible.
