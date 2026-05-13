@@ -9,6 +9,28 @@ function displayFileName(record) {
   return record.fileName || record.filePath || "Fichier depose";
 }
 
+function syncStatusLabel(record) {
+  const status = String(record?.syncStatus || "").trim();
+  if (status === "syncing") return "Synchronisation en cours";
+  if (status === "synced") return "Synchronise";
+  if (status === "sync_failed") return "Erreur de synchronisation";
+  if (status === "deleted") return "Supprime";
+  if (status === "superseded") return "Remplace";
+  if (status === "sync_pending" || status === "local_received") {
+    return "Recu localement";
+  }
+  return record ? "Document disponible" : "Depot attendu";
+}
+
+function flagClassName(record, done) {
+  if (!done) return "doc-flag";
+  if (record?.syncStatus === "sync_failed") return "doc-flag doc-flag--error";
+  if (record?.syncStatus === "syncing" || record?.syncStatus === "sync_pending") {
+    return "doc-flag doc-flag--pending";
+  }
+  return "doc-flag doc-flag--done";
+}
+
 export default function DocumentCard({
   document,
   record,
@@ -30,7 +52,7 @@ export default function DocumentCard({
       style={{ "--card-accent": document.accent, "--delay": `${index * 24}ms` }}
     >
       <div className="doc-card__eyebrow">
-        <span className={done ? "doc-flag doc-flag--done" : "doc-flag"}>
+        <span className={flagClassName(record, done)}>
           {done ? "Recu" : "Attendu"}
         </span>
         <span className="doc-card__category">{document.category || "Pieces"}</span>
@@ -50,7 +72,7 @@ export default function DocumentCard({
         </div>
         <div>
           <dt>Statut</dt>
-          <dd>{done ? "Document disponible" : "Depot attendu"}</dd>
+          <dd>{syncStatusLabel(record)}</dd>
         </div>
         {done ? (
           <>
@@ -68,6 +90,12 @@ export default function DocumentCard({
               <div>
                 <dt>Taille</dt>
                 <dd>{formatBytes(record.sizeBytes)}</dd>
+              </div>
+            ) : null}
+            {record.syncError ? (
+              <div className="doc-card__details--wide">
+                <dt>Erreur</dt>
+                <dd>{record.syncError}</dd>
               </div>
             ) : null}
           </>

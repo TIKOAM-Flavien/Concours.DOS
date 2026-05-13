@@ -127,3 +127,9 @@ export function sendReminderEmails(projectId, companyIds) {
     }
   );
 }
+
+export function retryDocumentSync(recordId) {
+  return request(`/document-records/${encodeURIComponent(recordId)}/retry`, {
+    method: "POST",
+  });
+}

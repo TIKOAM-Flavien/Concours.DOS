@@ -73,6 +73,69 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_audit_log_createdAt ON audit_log(createdAt);
+
+  CREATE TABLE IF NOT EXISTS document_records (
+    id                         TEXT PRIMARY KEY,
+    projectId                  TEXT NOT NULL DEFAULT '',
+    dossierId                  TEXT NOT NULL DEFAULT '',
+    folderPath                 TEXT NOT NULL DEFAULT '',
+    companyId                  TEXT NOT NULL DEFAULT '',
+    companyName                TEXT NOT NULL DEFAULT '',
+    companyEmail               TEXT NOT NULL DEFAULT '',
+    contactName                TEXT NOT NULL DEFAULT '',
+    submissionId               TEXT NOT NULL DEFAULT '',
+    contestName                TEXT NOT NULL DEFAULT '',
+    documentType               TEXT NOT NULL,
+    documentLabel              TEXT NOT NULL DEFAULT '',
+    status                     TEXT NOT NULL DEFAULT 'sync_pending',
+    operation                  TEXT NOT NULL DEFAULT 'upload',
+    originalFileName           TEXT NOT NULL DEFAULT '',
+    fileName                   TEXT NOT NULL DEFAULT '',
+    mimeType                   TEXT NOT NULL DEFAULT '',
+    storagePath                TEXT NOT NULL DEFAULT '',
+    sizeBytes                  INTEGER NOT NULL DEFAULT 0,
+    sha256                     TEXT NOT NULL DEFAULT '',
+    jobId                      TEXT NOT NULL DEFAULT '',
+    sharePointFilePath         TEXT NOT NULL DEFAULT '',
+    sharePointFileIdentifier   TEXT NOT NULL DEFAULT '',
+    sharePointLink             TEXT NOT NULL DEFAULT '',
+    flowResult                 TEXT NOT NULL DEFAULT '{}',
+    errorMessage               TEXT NOT NULL DEFAULT '',
+    receivedAt                 TEXT NOT NULL DEFAULT '',
+    uploadedAt                 TEXT NOT NULL DEFAULT '',
+    deletedAt                  TEXT NOT NULL DEFAULT '',
+    retainedUntil              TEXT NOT NULL DEFAULT '',
+    createdAt                  TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt                  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_records_project ON document_records(projectId, dossierId);
+  CREATE INDEX IF NOT EXISTS idx_document_records_scope ON document_records(dossierId, submissionId, companyId, documentType);
+  CREATE INDEX IF NOT EXISTS idx_document_records_status ON document_records(status, updatedAt);
+
+  CREATE TABLE IF NOT EXISTS document_upload_jobs (
+    id              TEXT PRIMARY KEY,
+    recordId        TEXT NOT NULL REFERENCES document_records(id) ON DELETE CASCADE,
+    operation       TEXT NOT NULL DEFAULT 'upload',
+    status          TEXT NOT NULL DEFAULT 'pending',
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    maxAttempts     INTEGER NOT NULL DEFAULT 5,
+    nextAttemptAt   TEXT NOT NULL DEFAULT '',
+    fileName        TEXT NOT NULL DEFAULT '',
+    storagePath     TEXT NOT NULL DEFAULT '',
+    sizeBytes       INTEGER NOT NULL DEFAULT 0,
+    sha256          TEXT NOT NULL DEFAULT '',
+    payload         TEXT NOT NULL DEFAULT '{}',
+    errorMessage    TEXT NOT NULL DEFAULT '',
+    flowResult      TEXT NOT NULL DEFAULT '{}',
+    startedAt       TEXT NOT NULL DEFAULT '',
+    finishedAt      TEXT NOT NULL DEFAULT '',
+    createdAt       TEXT NOT NULL DEFAULT (datetime('now')),
+    updatedAt       TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_upload_jobs_status ON document_upload_jobs(status, nextAttemptAt, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_document_upload_jobs_recordId ON document_upload_jobs(recordId);
 `);
 
 function ensureColumn({ table, column, definition }) {
@@ -190,6 +253,292 @@ const stmts = {
     INSERT INTO audit_log (actorIp, action, payloadHash, payload)
     VALUES (@actorIp, @action, @payloadHash, @payload)
   `),
+
+  findProjectByInvitationScope: db.prepare(`
+    SELECT p.id
+    FROM projects p
+    LEFT JOIN companies c ON c.projectId = p.id
+    WHERE p.dossierId = @dossierId
+      AND (
+        (@submissionId <> '' AND c.submissionId = @submissionId)
+        OR (@companyId <> '' AND c.companyId = @companyId)
+        OR (@companyName <> '' AND lower(c.companyName) = lower(@companyName))
+      )
+    ORDER BY (p.archivedAt = '') DESC, p.updatedAt DESC
+    LIMIT 1
+  `),
+
+  insertDocumentRecord: db.prepare(`
+    INSERT INTO document_records (
+      id, projectId, dossierId, folderPath, companyId, companyName,
+      companyEmail, contactName, submissionId, contestName, documentType,
+      documentLabel, status, operation, originalFileName, fileName, mimeType,
+      storagePath, sizeBytes, sha256, jobId, sharePointFilePath,
+      sharePointFileIdentifier, receivedAt, retainedUntil, createdAt, updatedAt
+    )
+    VALUES (
+      @id, @projectId, @dossierId, @folderPath, @companyId, @companyName,
+      @companyEmail, @contactName, @submissionId, @contestName, @documentType,
+      @documentLabel, @status, @operation, @originalFileName, @fileName, @mimeType,
+      @storagePath, @sizeBytes, @sha256, @jobId, @sharePointFilePath,
+      @sharePointFileIdentifier, @receivedAt, @retainedUntil, @now, @now
+    )
+  `),
+  markSupersededDocumentRecords: db.prepare(`
+    UPDATE document_records
+    SET status = 'superseded',
+        errorMessage = '',
+        updatedAt = @now
+    WHERE id <> @id
+      AND status NOT IN ('deleted', 'superseded')
+      AND documentType = @documentType
+      AND dossierId = @dossierId
+      AND (
+        (@projectId <> '' AND projectId = @projectId)
+        OR (@projectId = '' AND projectId = '')
+        OR projectId = ''
+      )
+      AND (
+        (@submissionId <> '' AND submissionId = @submissionId)
+        OR (@companyId <> '' AND companyId = @companyId)
+        OR (@companyName <> '' AND lower(companyName) = lower(@companyName))
+      )
+  `),
+  markSupersededDocumentJobs: db.prepare(`
+    UPDATE document_upload_jobs
+    SET status = 'superseded',
+        updatedAt = @now
+    WHERE status IN ('pending', 'failed')
+      AND recordId IN (
+        SELECT id
+        FROM document_records
+        WHERE id <> @id
+          AND status = 'superseded'
+          AND documentType = @documentType
+          AND dossierId = @dossierId
+          AND (
+            (@projectId <> '' AND projectId = @projectId)
+            OR (@projectId = '' AND projectId = '')
+            OR projectId = ''
+          )
+          AND (
+            (@submissionId <> '' AND submissionId = @submissionId)
+            OR (@companyId <> '' AND companyId = @companyId)
+            OR (@companyName <> '' AND lower(companyName) = lower(@companyName))
+          )
+      )
+  `),
+  insertDocumentUploadJob: db.prepare(`
+    INSERT INTO document_upload_jobs (
+      id, recordId, operation, status, attempts, maxAttempts, nextAttemptAt,
+      fileName, storagePath, sizeBytes, sha256, payload, createdAt, updatedAt
+    )
+    VALUES (
+      @id, @recordId, @operation, 'pending', 0, @maxAttempts, @nextAttemptAt,
+      @fileName, @storagePath, @sizeBytes, @sha256, @payload, @now, @now
+    )
+  `),
+  setDocumentRecordJobId: db.prepare(`
+    UPDATE document_records
+    SET jobId = @jobId,
+        updatedAt = @now
+    WHERE id = @id
+  `),
+  listDocumentRecordsForProject: db.prepare(`
+    SELECT *
+    FROM document_records
+    WHERE status NOT IN ('deleted', 'superseded')
+      AND (
+        (@projectId <> '' AND (projectId = @projectId OR (projectId = '' AND dossierId = @dossierId)))
+        OR (@projectId = '' AND dossierId = @dossierId)
+      )
+      AND (@companyId = '' OR companyId = @companyId)
+      AND (@companyName = '' OR lower(companyName) = lower(@companyName))
+      AND (@submissionId = '' OR submissionId = @submissionId)
+    ORDER BY updatedAt DESC
+  `),
+  listDocumentRecordsForInvitation: db.prepare(`
+    SELECT *
+    FROM document_records
+    WHERE status NOT IN ('deleted', 'superseded')
+      AND dossierId = @dossierId
+      AND (@projectId = '' OR projectId = @projectId OR projectId = '')
+      AND (
+        (@submissionId <> '' AND submissionId = @submissionId)
+        OR (@companyId <> '' AND companyId = @companyId)
+        OR (@companyName <> '' AND lower(companyName) = lower(@companyName))
+      )
+    ORDER BY updatedAt DESC
+  `),
+  getDocumentRecordById: db.prepare("SELECT * FROM document_records WHERE id = ?"),
+  getDocumentUploadJobById: db.prepare("SELECT * FROM document_upload_jobs WHERE id = ?"),
+  getActiveDocumentRecordByScope: db.prepare(`
+    SELECT *
+    FROM document_records
+    WHERE status NOT IN ('deleted', 'superseded')
+      AND dossierId = @dossierId
+      AND (@projectId = '' OR projectId = @projectId OR projectId = '')
+      AND documentType = @documentType
+      AND (
+        (@submissionId <> '' AND submissionId = @submissionId)
+        OR (@companyId <> '' AND companyId = @companyId)
+        OR (@companyName <> '' AND lower(companyName) = lower(@companyName))
+      )
+    ORDER BY updatedAt DESC
+    LIMIT 1
+  `),
+  markDocumentRecordDeleted: db.prepare(`
+    UPDATE document_records
+    SET status = 'deleted',
+        deletedAt = @deletedAt,
+        updatedAt = @deletedAt
+    WHERE id = @id
+  `),
+  claimNextDocumentUploadJob: db.prepare(`
+    SELECT *
+    FROM document_upload_jobs
+    WHERE status = 'pending'
+      AND (nextAttemptAt = '' OR nextAttemptAt <= @now)
+    ORDER BY
+      CASE WHEN nextAttemptAt = '' THEN 0 ELSE 1 END,
+      nextAttemptAt ASC,
+      createdAt ASC
+    LIMIT 1
+  `),
+  recoverStuckUploadingJobs: db.prepare(`
+    UPDATE document_upload_jobs
+    SET status = 'pending',
+        nextAttemptAt = @now,
+        errorMessage = 'Recovered from interrupted run.',
+        updatedAt = @now
+    WHERE status = 'uploading'
+  `),
+  recoverStuckSyncingRecords: db.prepare(`
+    UPDATE document_records
+    SET status = 'sync_pending',
+        updatedAt = @now
+    WHERE status = 'syncing'
+  `),
+  markDocumentUploadJobUploading: db.prepare(`
+    UPDATE document_upload_jobs
+    SET status = 'uploading',
+        attempts = attempts + 1,
+        startedAt = @now,
+        updatedAt = @now
+    WHERE id = @id
+      AND status = 'pending'
+  `),
+  markDocumentRecordSyncing: db.prepare(`
+    UPDATE document_records
+    SET status = 'syncing',
+        updatedAt = @now
+    WHERE id = @id
+      AND status NOT IN ('deleted', 'superseded')
+  `),
+  completeDocumentUploadJob: db.prepare(`
+    UPDATE document_upload_jobs
+    SET status = CASE WHEN status = 'superseded' THEN 'superseded' ELSE 'uploaded' END,
+        flowResult = @flowResult,
+        errorMessage = '',
+        finishedAt = @uploadedAt,
+        updatedAt = @uploadedAt
+    WHERE id = @id
+      AND status IN ('uploading', 'superseded')
+  `),
+  // Record SharePoint coordinates even on superseded/deleted records so that a
+  // follow-up cleanup (manual or scheduled) can locate the orphan file. The
+  // `status` is only flipped to 'synced' when the record is still live.
+  markDocumentRecordSynced: db.prepare(`
+    UPDATE document_records
+    SET sharePointFilePath = @sharePointFilePath,
+        sharePointFileIdentifier = @sharePointFileIdentifier,
+        sharePointLink = @sharePointLink,
+        flowResult = @flowResult,
+        status = CASE
+          WHEN status IN ('deleted', 'superseded') THEN status
+          ELSE 'synced'
+        END,
+        errorMessage = '',
+        uploadedAt = @uploadedAt,
+        updatedAt = @uploadedAt
+    WHERE id = @id
+  `),
+  retryDocumentUploadJob: db.prepare(`
+    UPDATE document_upload_jobs
+    SET status = 'pending',
+        errorMessage = '',
+        nextAttemptAt = @now,
+        updatedAt = @now
+    WHERE id = @id
+      AND status IN ('failed', 'pending')
+  `),
+  rollbackDocumentUploadJobAttempt: db.prepare(`
+    UPDATE document_upload_jobs
+    SET attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+        updatedAt = @now
+    WHERE id = @id
+  `),
+  markDocumentUploadJobFailed: db.prepare(`
+    UPDATE document_upload_jobs
+    SET status = @status,
+        errorMessage = @errorMessage,
+        nextAttemptAt = @nextAttemptAt,
+        finishedAt = @finishedAt,
+        updatedAt = @now
+    WHERE id = @id
+  `),
+  markDocumentRecordSyncFailed: db.prepare(`
+    UPDATE document_records
+    SET status = 'sync_failed',
+        errorMessage = @errorMessage,
+        updatedAt = @now
+    WHERE id = @id
+      AND status NOT IN ('deleted', 'superseded')
+  `),
+  markDocumentRecordSyncPending: db.prepare(`
+    UPDATE document_records
+    SET status = 'sync_pending',
+        errorMessage = '',
+        updatedAt = @now
+    WHERE id = @id
+      AND status = 'sync_failed'
+  `),
+  markDocumentRecordSyncPendingWithError: db.prepare(`
+    UPDATE document_records
+    SET status = 'sync_pending',
+        errorMessage = @errorMessage,
+        updatedAt = @now
+    WHERE id = @id
+      AND status NOT IN ('deleted', 'superseded')
+  `),
+  listDocumentUploadJobsForProject: db.prepare(`
+    SELECT j.*, r.status AS recordStatus, r.projectId, r.dossierId, r.companyId, r.companyName, r.submissionId,
+           r.documentType, r.documentLabel
+    FROM document_upload_jobs j
+    JOIN document_records r ON r.id = j.recordId
+    WHERE (
+      (@projectId <> '' AND (r.projectId = @projectId OR (r.projectId = '' AND r.dossierId = @dossierId)))
+      OR (@projectId = '' AND r.dossierId = @dossierId)
+    )
+    ORDER BY j.updatedAt DESC
+    LIMIT @limit
+  `),
+  listPurgeableDocumentRecords: db.prepare(`
+    SELECT *
+    FROM document_records
+    WHERE storagePath <> ''
+      AND retainedUntil <> ''
+      AND retainedUntil <= @now
+      AND status IN ('synced', 'deleted', 'superseded')
+    ORDER BY retainedUntil ASC
+    LIMIT @limit
+  `),
+  markDocumentRecordStoragePurged: db.prepare(`
+    UPDATE document_records
+    SET storagePath = '',
+        updatedAt = @now
+    WHERE id = @id
+  `),
 };
 
 function serializeCompany(row) {
@@ -228,6 +577,17 @@ function stableJson(value) {
     return JSON.stringify(value ?? {});
   } catch {
     return "{}";
+  }
+}
+
+function parseJsonObject(value, fallback = {}) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : fallback;
+  } catch {
+    return fallback;
   }
 }
 
@@ -451,6 +811,307 @@ export function writeAuditLog({ actorIp = "", action, payload = {} }) {
   });
 
   return { ok: true };
+}
+
+function serializeDocumentRecord(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    sizeBytes: Number(row.sizeBytes) || 0,
+    flowResult: parseJsonObject(row.flowResult, {}),
+  };
+}
+
+function serializeDocumentUploadJob(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    attempts: Number(row.attempts) || 0,
+    maxAttempts: Number(row.maxAttempts) || 0,
+    sizeBytes: Number(row.sizeBytes) || 0,
+    payload: parseJsonObject(row.payload, {}),
+    flowResult: parseJsonObject(row.flowResult, {}),
+  };
+}
+
+function cleanScope(value) {
+  return String(value || "").trim();
+}
+
+function normalizeRecordScope(scope = {}) {
+  return {
+    projectId: cleanScope(scope.projectId),
+    dossierId: cleanScope(scope.dossierId),
+    companyId: cleanScope(scope.companyId),
+    companyName: cleanScope(scope.companyName),
+    submissionId: cleanScope(scope.submissionId),
+  };
+}
+
+function addRetentionDate({ now = new Date(), retentionDays = 14 } = {}) {
+  const days = Math.max(0, Number(retentionDays) || 0);
+  return new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+export function findProjectForInvitationScope(scope = {}) {
+  const normalized = normalizeRecordScope(scope);
+  if (normalized.projectId) {
+    return getProject(normalized.projectId);
+  }
+
+  if (!normalized.dossierId) return null;
+  const row = stmts.findProjectByInvitationScope.get(normalized);
+  return row?.id ? getProject(row.id) : null;
+}
+
+const createDocumentRecordWithJobTx = db.transaction(
+  ({ record, job, retentionDays = 14 }) => {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const recordParams = {
+      id: cleanScope(record.id),
+      projectId: cleanScope(record.projectId),
+      dossierId: cleanScope(record.dossierId),
+      folderPath: cleanScope(record.folderPath),
+      companyId: cleanScope(record.companyId),
+      companyName: cleanScope(record.companyName),
+      companyEmail: cleanScope(record.companyEmail),
+      contactName: cleanScope(record.contactName),
+      submissionId: cleanScope(record.submissionId),
+      contestName: cleanScope(record.contestName),
+      documentType: cleanScope(record.documentType),
+      documentLabel: cleanScope(record.documentLabel),
+      status: "sync_pending",
+      operation: cleanScope(record.operation || "upload"),
+      originalFileName: cleanScope(record.originalFileName),
+      fileName: cleanScope(record.fileName),
+      mimeType: cleanScope(record.mimeType),
+      storagePath: cleanScope(record.storagePath),
+      sizeBytes: Number(record.sizeBytes) || 0,
+      sha256: cleanScope(record.sha256),
+      jobId: cleanScope(job.id),
+      sharePointFilePath: cleanScope(record.sharePointFilePath),
+      sharePointFileIdentifier: cleanScope(record.sharePointFileIdentifier),
+      receivedAt: nowIso,
+      retainedUntil: addRetentionDate({ now, retentionDays }),
+      now: nowIso,
+    };
+
+    stmts.markSupersededDocumentRecords.run({
+      ...recordParams,
+      now: nowIso,
+    });
+    stmts.markSupersededDocumentJobs.run({
+      ...recordParams,
+      now: nowIso,
+    });
+    stmts.insertDocumentRecord.run(recordParams);
+    stmts.insertDocumentUploadJob.run({
+      id: cleanScope(job.id),
+      recordId: recordParams.id,
+      operation: recordParams.operation,
+      maxAttempts: Math.max(1, Number(job.maxAttempts) || 5),
+      nextAttemptAt: nowIso,
+      fileName: recordParams.fileName,
+      storagePath: recordParams.storagePath,
+      sizeBytes: recordParams.sizeBytes,
+      sha256: recordParams.sha256,
+      payload: stableJson(job.payload || {}),
+      now: nowIso,
+    });
+
+    return serializeDocumentRecord(stmts.getDocumentRecordById.get(recordParams.id));
+  }
+);
+
+export function createDocumentRecordWithJob(params) {
+  return createDocumentRecordWithJobTx(params);
+}
+
+export function listDocumentRecordsForProject(scope = {}) {
+  const normalized = normalizeRecordScope(scope);
+  return stmts.listDocumentRecordsForProject
+    .all(normalized)
+    .map(serializeDocumentRecord);
+}
+
+export function listDocumentRecordsForInvitation(scope = {}) {
+  const normalized = normalizeRecordScope(scope);
+  if (!normalized.dossierId) return [];
+  if (!normalized.submissionId && !normalized.companyId && !normalized.companyName) {
+    return [];
+  }
+  return stmts.listDocumentRecordsForInvitation
+    .all(normalized)
+    .map(serializeDocumentRecord);
+}
+
+export function getDocumentRecordById(id) {
+  return serializeDocumentRecord(stmts.getDocumentRecordById.get(id));
+}
+
+export function getActiveDocumentRecordByScope(scope = {}) {
+  const normalized = normalizeRecordScope(scope);
+  if (!normalized.dossierId || !scope.documentType) return null;
+  return serializeDocumentRecord(
+    stmts.getActiveDocumentRecordByScope.get({
+      ...normalized,
+      documentType: cleanScope(scope.documentType),
+    })
+  );
+}
+
+export function markDocumentRecordDeleted(id, deletedAt = new Date().toISOString()) {
+  stmts.markDocumentRecordDeleted.run({ id: cleanScope(id), deletedAt });
+  return getDocumentRecordById(id);
+}
+
+// Atomic claim: a single transaction that selects the next pending job,
+// conditionally flips it to 'uploading' (the WHERE clause is the lock - if
+// another claim raced in, our UPDATE changes 0 rows and we return null), and
+// mirrors the change on the linked document_record. Wrapping the three
+// statements in `db.transaction` keeps WAL writes consistent and avoids
+// half-claimed rows when another statement throws mid-claim.
+const claimNextDocumentUploadJobTx = db.transaction((nowIso) => {
+  const selected = stmts.claimNextDocumentUploadJob.get({ now: nowIso });
+  if (!selected) return null;
+
+  const result = stmts.markDocumentUploadJobUploading.run({
+    id: selected.id,
+    now: nowIso,
+  });
+  if (!result.changes) return null;
+
+  stmts.markDocumentRecordSyncing.run({ id: selected.recordId, now: nowIso });
+  return stmts.getDocumentUploadJobById.get(selected.id);
+});
+
+export function claimNextDocumentUploadJob({ now = new Date() } = {}) {
+  const nowIso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const row = claimNextDocumentUploadJobTx(nowIso);
+  return row ? serializeDocumentUploadJob(row) : null;
+}
+
+// Recover jobs/records that were mid-upload when the process crashed or was
+// killed. Without this, a row in status='uploading' is invisible to the claim
+// query and stays wedged forever. Called once on worker startup.
+export function recoverStuckUploadingJobs({ now = new Date() } = {}) {
+  const nowIso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const jobs = stmts.recoverStuckUploadingJobs.run({ now: nowIso });
+  const records = stmts.recoverStuckSyncingRecords.run({ now: nowIso });
+  return { jobs: jobs.changes || 0, records: records.changes || 0 };
+}
+
+export function completeDocumentUploadJob({ jobId, flowResult = {}, sharePoint = {} }) {
+  const uploadedAt = new Date().toISOString();
+  const flowResultJson = stableJson(flowResult);
+  const job = serializeDocumentUploadJob(stmts.getDocumentUploadJobById.get(jobId));
+  if (!job) return null;
+
+  stmts.completeDocumentUploadJob.run({
+    id: job.id,
+    flowResult: flowResultJson,
+    uploadedAt,
+  });
+  stmts.markDocumentRecordSynced.run({
+    id: job.recordId,
+    sharePointFilePath: cleanScope(sharePoint.filePath),
+    sharePointFileIdentifier: cleanScope(sharePoint.fileIdentifier),
+    sharePointLink: cleanScope(sharePoint.link),
+    flowResult: flowResultJson,
+    uploadedAt,
+  });
+
+  return serializeDocumentUploadJob(stmts.getDocumentUploadJobById.get(job.id));
+}
+
+export function failDocumentUploadJob({
+  jobId,
+  errorMessage,
+  retryDelayMs = 0,
+  // When true, do NOT count this failure against the attempts budget. Used for
+  // operator-fixable misconfiguration (missing flow URL). The DB column was
+  // bumped by markDocumentUploadJobUploading; this rolls it back.
+  preserveAttempts = false,
+  // When true, force terminal failure regardless of attempts (e.g. ENOENT on
+  // the staging file - retrying is pointless).
+  permanent = false,
+}) {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const job = serializeDocumentUploadJob(stmts.getDocumentUploadJobById.get(jobId));
+  if (!job) return null;
+
+  if (preserveAttempts && job.attempts > 0) {
+    stmts.rollbackDocumentUploadJobAttempt.run({ id: job.id, now: nowIso });
+  }
+
+  const effectiveAttempts = preserveAttempts ? Math.max(0, job.attempts - 1) : job.attempts;
+  const finalFailure = permanent || effectiveAttempts >= job.maxAttempts;
+  const nextAttemptAt = finalFailure
+    ? ""
+    : new Date(now.getTime() + Math.max(0, Number(retryDelayMs) || 0)).toISOString();
+  stmts.markDocumentUploadJobFailed.run({
+    id: job.id,
+    status: finalFailure ? "failed" : "pending",
+    errorMessage: cleanScope(errorMessage).slice(0, 2000),
+    nextAttemptAt,
+    finishedAt: finalFailure ? nowIso : "",
+    now: nowIso,
+  });
+
+  if (finalFailure) {
+    stmts.markDocumentRecordSyncFailed.run({
+      id: job.recordId,
+      errorMessage: cleanScope(errorMessage).slice(0, 2000),
+      now: nowIso,
+    });
+  } else {
+    stmts.markDocumentRecordSyncPendingWithError.run({
+      id: job.recordId,
+      errorMessage: cleanScope(errorMessage).slice(0, 2000),
+      now: nowIso,
+    });
+  }
+
+  return serializeDocumentUploadJob(stmts.getDocumentUploadJobById.get(job.id));
+}
+
+export function retryDocumentUploadJob(jobId) {
+  const now = new Date().toISOString();
+  const job = serializeDocumentUploadJob(stmts.getDocumentUploadJobById.get(jobId));
+  if (!job) return null;
+  stmts.retryDocumentUploadJob.run({ id: job.id, now });
+  stmts.markDocumentRecordSyncPending.run({ id: job.recordId, now });
+  return serializeDocumentUploadJob(stmts.getDocumentUploadJobById.get(job.id));
+}
+
+export function retryDocumentRecordSync(recordId) {
+  const record = getDocumentRecordById(recordId);
+  if (!record?.jobId) return null;
+  return retryDocumentUploadJob(record.jobId);
+}
+
+export function listDocumentUploadJobsForProject(scope = {}, limit = 100) {
+  const normalized = normalizeRecordScope(scope);
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500));
+  return stmts.listDocumentUploadJobsForProject
+    .all({ ...normalized, limit: safeLimit })
+    .map(serializeDocumentUploadJob);
+}
+
+export function listPurgeableDocumentRecords({ now = new Date(), limit = 100 } = {}) {
+  const nowIso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 1000));
+  return stmts.listPurgeableDocumentRecords
+    .all({ now: nowIso, limit: safeLimit })
+    .map(serializeDocumentRecord);
+}
+
+export function markDocumentRecordStoragePurged(id) {
+  const now = new Date().toISOString();
+  stmts.markDocumentRecordStoragePurged.run({ id: cleanScope(id), now });
+  return getDocumentRecordById(id);
 }
 
 export default db;

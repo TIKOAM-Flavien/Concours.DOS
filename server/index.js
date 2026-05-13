@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,8 +14,19 @@ import {
 import {
   getAllProjects,
   getProject,
+  createDocumentRecordWithJob,
+  findProjectForInvitationScope,
+  getActiveDocumentRecordByScope,
+  getDocumentRecordById,
+  listDocumentRecordsForInvitation,
+  listDocumentRecordsForProject,
+  listDocumentUploadJobsForProject,
+  listPurgeableDocumentRecords,
   upsertProject,
   deleteProject as removeProject,
+  markDocumentRecordDeleted,
+  markDocumentRecordStoragePurged,
+  retryDocumentRecordSync,
   setProjectArchived,
   upsertCompany,
   deleteCompany as removeCompany,
@@ -29,6 +42,12 @@ import {
   scrubOldAuditPayloads,
 } from "./db.js";
 import { callDownloadFlow, callFlow, getFlowConfig, getFlowStatus } from "./flows.js";
+import {
+  getUploadStorageConfig,
+  parseMultipartFileUpload,
+  removeStoredUploadDir,
+} from "./documentFiles.js";
+import { startDocumentUploadWorker } from "./uploadWorker.js";
 import {
   buildSignedInvitationUrl,
   getInvitationPayloadIssues,
@@ -77,23 +96,11 @@ const MAX_INVITATION_TTL_MINUTES = Math.max(
   parsePositiveInt(process.env.PORTAL_LINK_TTL_MAX_MINUTES, 525600),
   1
 );
-const base64OverheadRatio = 4 / 3; // base64 expands data ~33%
-const estimatedJsonOverheadMb = 2; // small envelope: metadata + JSON syntax
 const bodyLimitMb = Math.max(
-  parsePositiveInt(
-    process.env.PORTAL_MAX_BODY_MB,
-    Math.ceil(maxFileMb * base64OverheadRatio + estimatedJsonOverheadMb)
-  ),
+  parsePositiveInt(process.env.PORTAL_MAX_BODY_MB, 5),
   1
 );
-
-function maxBase64CharsForFileMb(fileMb) {
-  // For a file of N bytes, base64 length is 4*ceil(N/3).
-  const bytes = Math.max(1, Math.floor(fileMb * 1024 * 1024));
-  return 4 * Math.ceil(bytes / 3);
-}
-
-const maxFileContentChars = maxBase64CharsForFileMb(maxFileMb);
+const uploadStorageConfig = getUploadStorageConfig(process.env);
 
 app.disable("x-powered-by");
 
@@ -146,7 +153,7 @@ app.use((err, req, res, next) => {
   if (err && err.type === "entity.too.large") {
     return res.status(413).json({
       error: "Payload too large.",
-      hint: `Increase PORTAL_MAX_BODY_MB (currently ${bodyLimitMb}MB) or reduce the upload size. For file uploads, PORTAL_MAX_FILE_MB is ${maxFileMb}MB.`,
+      hint: `Increase PORTAL_MAX_BODY_MB (currently ${bodyLimitMb}MB) for JSON requests. File uploads use multipart and PORTAL_MAX_FILE_MB=${maxFileMb}MB.`,
     });
   }
   return next(err);
@@ -314,7 +321,9 @@ function normalizeIp(rawIp) {
 }
 
 function getActorIp(req) {
-  return normalizeIp(req.socket?.remoteAddress || req.ip || "");
+  // Prefer Express `req.ip` (honours `trust proxy` / X-Forwarded-For) over the
+  // raw TCP peer, so audits and admin access work behind a reverse proxy.
+  return normalizeIp(req.ip || req.socket?.remoteAddress || "");
 }
 
 function audit(req, action, payload) {
@@ -325,16 +334,89 @@ function audit(req, action, payload) {
   }
 }
 
-function isLocalRequest(req) {
-  const ip = normalizeIp(req.socket?.remoteAddress);
+function ipv4ToInt(value) {
+  const parts = String(value || "").split(".");
+  if (parts.length !== 4) return null;
+  let out = 0;
+  for (const part of parts) {
+    const n = Number(part);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    out = (out * 256) + n;
+  }
+  return out >>> 0;
+}
+
+function parseAdminAllowedEntries() {
+  const raw = String(process.env.PORTAL_ADMIN_ALLOWED_IPS || "").trim();
+  if (!raw) return { ips: new Set(), cidrs: [] };
+
+  const ips = new Set();
+  const cidrs = [];
+
+  for (const part of raw.split(",")) {
+    const entry = part.trim();
+    if (!entry) continue;
+
+    if (entry.includes("/")) {
+      const [addr, prefixRaw] = entry.split("/");
+      const base = ipv4ToInt(normalizeIp(addr));
+      const prefix = Number(prefixRaw);
+      if (base === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+        console.warn(`[admin-allow] ignoring invalid CIDR entry: ${entry}`);
+        continue;
+      }
+      const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+      cidrs.push({ network: (base & mask) >>> 0, mask });
+      continue;
+    }
+
+    ips.add(normalizeIp(entry));
+  }
+
+  return { ips, cidrs };
+}
+
+const { ips: adminAllowedIps, cidrs: adminAllowedCidrs } = parseAdminAllowedEntries();
+
+function isLoopbackActorIp(ip) {
   return ip === "127.0.0.1" || ip === "::1";
 }
 
+function isAdminClientAllowed(req) {
+  const ip = getActorIp(req);
+  if (isLoopbackActorIp(ip)) return true;
+  if (adminAllowedIps.size > 0 && adminAllowedIps.has(ip)) return true;
+  if (adminAllowedCidrs.length > 0) {
+    const numeric = ipv4ToInt(ip);
+    if (numeric !== null) {
+      for (const { network, mask } of adminAllowedCidrs) {
+        if (((numeric & mask) >>> 0) === network) return true;
+      }
+    }
+  }
+  return false;
+}
+
+app.get("/api/admin-debug-ip", (req, res) => {
+  res.json({
+    actorIp: getActorIp(req),
+    reqIp: req.ip,
+    reqIps: req.ips,
+    remoteAddress: req.socket?.remoteAddress,
+    trustProxy: req.app.get("trust proxy"),
+    xForwardedFor: req.get("x-forwarded-for"),
+    allowed: Array.from(adminAllowedIps),
+  });
+});
+
 function requireLocalAdmin(req, res, next) {
-  if (isLocalRequest(req)) return next();
+  if (isAdminClientAllowed(req)) return next();
+  const hasAllowList = adminAllowedIps.size > 0 || adminAllowedCidrs.length > 0;
+  const hint = hasAllowList
+    ? " If you use a reverse proxy, set TRUST_PROXY correctly so the client IP is visible, or add your IP/CIDR to PORTAL_ADMIN_ALLOWED_IPS."
+    : " Use SSH port forwarding to localhost, open /admin from the server itself, or set PORTAL_ADMIN_ALLOWED_IPS (comma-separated, IPs or CIDR ranges; pair with TRUST_PROXY when behind a proxy).";
   return res.status(403).json({
-    error:
-      "Admin access is restricted to localhost. Use a local session on the server host.",
+    error: `Admin access is restricted to localhost.${hint}`,
   });
 }
 
@@ -535,6 +617,7 @@ function sanitizeCompanyPayload(raw = {}) {
 
 function buildMetadata(context, document) {
   return {
+    projectId: context.projectId,
     dossierId: context.dossierId,
     companyId: context.companyId,
     companyName: context.companyName,
@@ -547,6 +630,75 @@ function buildMetadata(context, document) {
     documentLabel: document.label,
     source: "client-portal",
   };
+}
+
+function resolveInvitationProject(invitation) {
+  return findProjectForInvitationScope({
+    projectId: invitation.projectId,
+    dossierId: invitation.dossierId,
+    companyId: invitation.companyId,
+    companyName: invitation.companyName,
+    submissionId: invitation.submissionId,
+  });
+}
+
+function ensureProjectAllowsDeposits(invitation) {
+  const project = resolveInvitationProject(invitation);
+  if (project?.archivedAt) {
+    throw forbidden("Project is archived; new deposits are blocked.");
+  }
+  return project;
+}
+
+function documentRecordToFlowRow(record) {
+  const filePath = record.sharePointFilePath || `local:${record.id}`;
+  const fileIdentifier = record.id;
+  const modifiedAt =
+    record.uploadedAt || record.receivedAt || record.updatedAt || record.createdAt || "";
+
+  return {
+    localRecordId: record.id,
+    localJobId: record.jobId || "",
+    isLocalRecord: true,
+    syncStatus: record.status,
+    SyncStatus: record.status,
+    syncError: record.errorMessage || "",
+    errorMessage: record.errorMessage || "",
+    fileName: record.fileName,
+    Name_extension: record.fileName,
+    FileLeafRef: record.fileName,
+    Name: record.fileName,
+    filePath,
+    ServerRelativeUrl: filePath,
+    FileRef: filePath,
+    fileIdentifier,
+    Identifier: fileIdentifier,
+    sharePointFileIdentifier: record.sharePointFileIdentifier || "",
+    sharePointFilePath: record.sharePointFilePath || "",
+    Link: record.sharePointLink || "",
+    webUrl: record.sharePointLink || "",
+    Modified: modifiedAt,
+    LastModified: modifiedAt,
+    Size: record.sizeBytes || 0,
+    Length: record.sizeBytes || 0,
+    Type_piece: record.documentType,
+    DocumentType: record.documentType,
+    documentType: record.documentType,
+    documentLabel: record.documentLabel,
+    CompanyId: record.companyId,
+    companyId: record.companyId,
+    Entreprise_depot: record.companyName,
+    CompanyName: record.companyName,
+    companyName: record.companyName,
+    SubmissionId: record.submissionId,
+    submissionId: record.submissionId,
+    Projet: record.dossierId,
+    dossierId: record.dossierId,
+  };
+}
+
+function recordsToFlowRows(records) {
+  return (records || []).map(documentRecordToFlowRow);
 }
 
 function resolvePortalEntryUrl(req) {
@@ -761,22 +913,6 @@ function resolveInvitationDocument(invitation, rawDocumentId) {
   return document;
 }
 
-function ensurePathWithinFolder(filePath, folderPath) {
-  const normalizedFilePath = normalizeSharePointFolderPath(
-    normalizeTextField(filePath, "filePath", { required: true, max: 1000 })
-  );
-  const normalizedFolderPath = normalizeSharePointFolderPath(folderPath);
-
-  const fileLower = normalizedFilePath.toLowerCase();
-  const folderLower = normalizedFolderPath.toLowerCase();
-
-  if (fileLower === folderLower || fileLower.startsWith(`${folderLower}/`)) {
-    return normalizedFilePath;
-  }
-
-  throw forbidden("filePath is outside the invitation folder.");
-}
-
 function normalizeLookupKey(value) {
   return String(value || "")
     .toLowerCase()
@@ -816,186 +952,172 @@ function readRecordField(row, candidates) {
   return "";
 }
 
-function normalizeRecordPathFromRow(row) {
-  return normalizeSharePointFolderPath(
-    readRecordField(row, [
-      "ServerRelativeUrl",
-      "Path",
-      "FileRef",
-      "RelativeUrl",
-      "DecodedUrl",
-      "ServerRelativePath.DecodedUrl",
-      "filePath",
-    ])
-  );
-}
-
-function normalizeRecordIdentifierFromRow(row) {
-  return readRecordField(row, [
-    "Identifier",
-    "identifier",
-    "UniqueId",
-    "FileIdentifier",
-    "DriveItemId",
-    "FileId",
-    "ID",
-    "Id",
-    "fileIdentifier",
-  ]);
-}
-
-async function ensureFileReferenceAllowed({
-  flowConfig,
-  invitation,
-  filePath,
-  fileIdentifier,
-  requirePath = false,
-}) {
-  const normalizedFilePath = filePath
-    ? normalizeSharePointFolderPath(
-        normalizeTextField(filePath, "filePath", { required: true, max: 1000 })
-      )
-    : "";
-  const normalizedFileIdentifier = fileIdentifier
-    ? normalizeTextField(fileIdentifier, "fileIdentifier", { required: true, max: 1000 })
-    : "";
-
-  if (requirePath && !normalizedFilePath) {
-    throw badRequest("Missing required field: filePath");
-  }
-
-  if (!normalizedFilePath && !normalizedFileIdentifier) {
-    throw badRequest("Missing file reference.");
-  }
-
-  if (normalizedFilePath) {
-    try {
-      return ensurePathWithinFolder(normalizedFilePath, invitation.folderPath);
-    } catch {
-      // Some SharePoint integrations return equivalent paths with different
-      // prefixes. Fall back to invitation-scoped record verification.
-    }
-  }
-
-  ensureFlowUrl(flowConfig.getDocumentsUrl, "GET_DOCUMENTS");
-  const rows = await callFlow("GET_DOCUMENTS", flowConfig.getDocumentsUrl, {
-    dossierId: invitation.dossierId,
-    companyId: invitation.companyId,
-    companyName: invitation.companyName,
-    submissionId: invitation.submissionId,
-  });
-
-  const expectedPath = normalizedFilePath.toLowerCase();
-  const expectedIdentifier = normalizedFileIdentifier.toLowerCase();
-  const isAllowed = Array.isArray(rows) && rows.some((row) => {
-    const rowPath = normalizeRecordPathFromRow(row).toLowerCase();
-    const rowIdentifier = normalizeRecordIdentifierFromRow(row).toLowerCase();
-
-    if (expectedIdentifier && rowIdentifier && rowIdentifier === expectedIdentifier) {
-      return true;
-    }
-    if (expectedPath && rowPath && rowPath === expectedPath) {
-      return true;
-    }
+function localRecordMatchesInvitation(record, invitation) {
+  if (!record || record.status === "deleted" || record.status === "superseded") {
     return false;
-  });
-
-  if (!isAllowed) {
-    throw forbidden("filePath is outside the invitation folder.");
   }
-
-  return normalizedFilePath;
+  if (record.dossierId !== invitation.dossierId) return false;
+  if (invitation.projectId && record.projectId && record.projectId !== invitation.projectId) {
+    return false;
+  }
+  if (invitation.submissionId && record.submissionId) {
+    return record.submissionId === invitation.submissionId;
+  }
+  if (invitation.companyId && record.companyId) {
+    return record.companyId === invitation.companyId;
+  }
+  return normalizeLookupKey(record.companyName) === normalizeLookupKey(invitation.companyName);
 }
 
-// Combined verification: ensures the reference is allowed for the invitation
-// AND that the SharePoint record's document type matches `documentId`. Fetches
-// GET_DOCUMENTS at most once (instead of up to twice in the previous split).
-async function verifyFileReferenceAndDocumentType({
-  flowConfig,
+function resolveLocalRecordReference({
   invitation,
-  filePath,
   fileIdentifier,
-  documentId,
-  requirePath = false,
+  filePath,
+  documentId = "",
+  requireDocumentType = false,
 }) {
-  const expected = normalizeDocumentId(documentId);
-  if (!expected) {
-    throw badRequest("Missing required field: documentId");
-  }
-
-  const normalizedFilePath = filePath
-    ? normalizeSharePointFolderPath(
-        normalizeTextField(filePath, "filePath", { required: true, max: 1000 })
-      )
-    : "";
-  const normalizedFileIdentifier = fileIdentifier
-    ? normalizeTextField(fileIdentifier, "fileIdentifier", { required: true, max: 1000 })
-    : "";
-
-  if (requirePath && !normalizedFilePath) {
-    throw badRequest("Missing required field: filePath");
-  }
-  if (!normalizedFilePath && !normalizedFileIdentifier) {
-    throw badRequest("Missing file reference.");
-  }
-
-  ensureFlowUrl(flowConfig.getDocumentsUrl, "GET_DOCUMENTS");
-  const rows = await callFlow("GET_DOCUMENTS", flowConfig.getDocumentsUrl, {
-    dossierId: invitation.dossierId,
-    companyId: invitation.companyId,
-    companyName: invitation.companyName,
-    submissionId: invitation.submissionId,
+  const normalizedIdentifier = normalizeTextField(fileIdentifier, "fileIdentifier", {
+    max: 1000,
   });
+  const normalizedPath = normalizeTextField(filePath, "filePath", { max: 1000 });
 
-  const expectedPath = normalizedFilePath.toLowerCase();
-  const expectedIdentifier = normalizedFileIdentifier.toLowerCase();
-  const matchedRow = Array.isArray(rows)
-    ? rows.find((row) => {
-        const rowPath = normalizeRecordPathFromRow(row).toLowerCase();
-        const rowIdentifier = normalizeRecordIdentifierFromRow(row).toLowerCase();
-
-        if (expectedIdentifier && rowIdentifier && rowIdentifier === expectedIdentifier) {
-          return true;
-        }
-        if (expectedPath && rowPath && rowPath === expectedPath) {
-          return true;
-        }
-        return false;
-      })
-    : null;
-
-  if (!matchedRow) {
-    throw forbidden("file reference could not be verified.");
+  let record = normalizedIdentifier ? getDocumentRecordById(normalizedIdentifier) : null;
+  if (!record && normalizedPath.startsWith("local:")) {
+    record = getDocumentRecordById(normalizedPath.slice("local:".length));
+  }
+  if (!record && documentId) {
+    record = getActiveDocumentRecordByScope({
+      projectId: invitation.projectId,
+      dossierId: invitation.dossierId,
+      companyId: invitation.companyId,
+      companyName: invitation.companyName,
+      submissionId: invitation.submissionId,
+      documentType: documentId,
+    });
   }
 
-  // The row was found in GET_DOCUMENTS, which is already scoped to this
-  // invitation's dossierId / companyId / submissionId. An additional
-  // ensurePathWithinFolder check here is intentionally omitted: it was
-  // causing false rejections when the file's SharePoint server-relative path
-  // differs in format from invitation.folderPath (e.g. subfolder created by
-  // the UPLOAD flow, or a path prefix mismatch between SharePoint and the
-  // signed invitation). The documentType check below provides the second
-  // layer of verification.
-  const rowPath = normalizeRecordPathFromRow(matchedRow);
-  const resolvedPath = rowPath || normalizedFilePath;
-
-  const actualRaw = readRecordField(matchedRow, [
-    "DocumentType",
-    "Type_piece",
-    "type_piece",
-    "documentType",
-    "documentId",
-  ]);
-  const actual = normalizeDocumentId(actualRaw);
-  if (!actual) {
-    throw forbidden("file document type could not be verified.");
+  if (!record || !localRecordMatchesInvitation(record, invitation)) {
+    throw forbidden("local document reference could not be verified.");
   }
 
-  if (actual !== expected) {
-    throw forbidden(`documentId mismatch: expected ${expected} but file is ${actual}.`);
+  if (requireDocumentType) {
+    const expected = normalizeDocumentId(documentId);
+    const actual = normalizeDocumentId(record.documentType);
+    if (!expected || actual !== expected) {
+      throw forbidden(`documentId mismatch: expected ${expected} but file is ${actual}.`);
+    }
   }
 
-  return resolvedPath || normalizedFilePath;
+  return record;
+}
+
+async function queueDocumentUploadFromMultipart(req, operation) {
+  const recordId = randomUUID();
+  const jobId = randomUUID();
+  let parsed = null;
+
+  try {
+    parsed = await parseMultipartFileUpload(req, {
+      uploadId: recordId,
+      maxFileBytes: maxFileMb * 1024 * 1024,
+      env: process.env,
+    });
+
+    const invitation = getVerifiedInvitationFromBody(parsed.fields);
+    const project = ensureProjectAllowsDeposits(invitation);
+    checkSubmissionDailyBudget(invitation, { cost: 2 });
+
+    const document = resolveInvitationDocument(invitation, parsed.fields?.documentId);
+    const previousRecord = operation === "update"
+      ? resolveLocalRecordReference({
+          invitation,
+          fileIdentifier: parsed.fields?.fileIdentifier,
+          filePath: parsed.fields?.filePath,
+          documentId: document.id,
+          requireDocumentType: true,
+        })
+      : null;
+    const effectiveOperation =
+      operation === "update" && previousRecord?.sharePointFileIdentifier
+        ? "update"
+        : "upload";
+    const fileName = prefixFileNameWithCompany(
+      normalizeFileName(parsed.file.originalFileName),
+      invitation.companyName
+    );
+    const metadata = buildMetadata(
+      {
+        ...invitation,
+        projectId: invitation.projectId || project?.id || "",
+      },
+      document
+    );
+    const payload = {
+      folderPath: invitation.folderPath,
+      ...metadata,
+      metadata,
+    };
+
+    if (effectiveOperation === "update") {
+      payload.fileIdentifier = previousRecord.sharePointFileIdentifier;
+      payload.filePath = previousRecord.sharePointFilePath || "";
+    }
+
+    const record = createDocumentRecordWithJob({
+      retentionDays: uploadStorageConfig.retentionDays,
+      record: {
+        id: recordId,
+        projectId: invitation.projectId || project?.id || "",
+        dossierId: invitation.dossierId,
+        folderPath: invitation.folderPath,
+        companyId: invitation.companyId,
+        companyName: invitation.companyName,
+        companyEmail: invitation.companyEmail,
+        contactName: invitation.contactName,
+        submissionId: invitation.submissionId,
+        contestName: invitation.contestName,
+        documentType: document.id,
+        documentLabel: document.label,
+        operation: effectiveOperation,
+        originalFileName: parsed.file.originalFileName,
+        fileName,
+        mimeType: parsed.file.mimeType,
+        storagePath: parsed.file.storagePath,
+        sizeBytes: parsed.file.sizeBytes,
+        sha256: parsed.file.sha256,
+        sharePointFilePath: previousRecord?.sharePointFilePath || "",
+        sharePointFileIdentifier: previousRecord?.sharePointFileIdentifier || "",
+      },
+      job: {
+        id: jobId,
+        operation: effectiveOperation,
+        maxAttempts: uploadStorageConfig.workerMaxAttempts,
+        payload,
+      },
+    });
+    commitSubmissionDailyBudget(invitation, { cost: 2 });
+
+    return {
+      ok: true,
+      queued: true,
+      record: documentRecordToFlowRow(record),
+      job: {
+        id: jobId,
+        operation: effectiveOperation,
+        status: "pending",
+        documentId: document.id,
+        fileName,
+        sizeBytes: parsed.file.sizeBytes,
+        sha256: parsed.file.sha256,
+        createdAt: record.createdAt,
+      },
+    };
+  } catch (error) {
+    if (parsed) {
+      await removeStoredUploadDir(recordId, process.env).catch(() => {});
+    }
+    throw error;
+  }
 }
 
 function buildAdminSecurityResponse(req) {
@@ -1034,9 +1156,6 @@ function getStartupDiagnostics(bundle) {
     );
   }
 
-  if (!flows.documentsEnabled) {
-    errors.push("POWER_AUTOMATE_GET_DOCUMENTS_URL is missing.");
-  }
   if (!flows.uploadEnabled) {
     errors.push("POWER_AUTOMATE_UPLOAD_FILE_URL is missing.");
   }
@@ -1048,6 +1167,9 @@ function getStartupDiagnostics(bundle) {
   }
   if (!flows.downloadEnabled) {
     warnings.push("POWER_AUTOMATE_DOWNLOAD_FILE_URL is missing. Preview/download will be unavailable.");
+  }
+  if (!flows.getDocumentsFlowEnabled) {
+    warnings.push("POWER_AUTOMATE_GET_DOCUMENTS_URL is not used by the local document store.");
   }
 
   const detectedPublicKeys = SENSITIVE_PUBLIC_ENV_KEYS.filter((key) => Boolean(process.env[key]));
@@ -1179,6 +1301,7 @@ function buildCompanyInvitationContext(project, company) {
   );
 
   return {
+    projectId: project.id,
     companyId: company.companyId,
     companyName: company.companyName,
     companyEmail: company.companyEmail,
@@ -1453,7 +1576,6 @@ app.post(
   wrap(async (req, res) => {
     const flowConfig = getFlowConfig(process.env);
     ensureFlowUrl(flowConfig.sendRemindersUrl, "SEND_REMINDERS");
-    ensureFlowUrl(flowConfig.getDocumentsUrl, "GET_DOCUMENTS");
     const signing = getSigningConfig(process.env);
     if (!signing.secret) {
       throw serviceUnavailable(
@@ -1472,13 +1594,12 @@ app.post(
       throw badRequest("Aucune entreprise a relancer.");
     }
 
-    const rows = await callFlow("GET_DOCUMENTS", flowConfig.getDocumentsUrl, {
-      dossierId: project.dossierId,
-      companyId: "",
-      companyName: "",
-      submissionId: "",
-    });
-    const documentRows = Array.isArray(rows) ? rows : [];
+    const documentRows = recordsToFlowRows(
+      listDocumentRecordsForProject({
+        projectId: project.id,
+        dossierId: project.dossierId,
+      })
+    );
 
     const customDocs = Array.isArray(project.customDocuments)
       ? project.customDocuments
@@ -1646,14 +1767,16 @@ app.get(
 app.post(
   ["/api/admin/maintenance/cleanup", "/api/maintenance/cleanup"],
   requireLocalAdmin,
-  wrap((req, res) => {
+  wrap(async (req, res) => {
     const prune = pruneRevokedInvitations();
     const scrub = scrubOldAuditPayloads();
+    const purgedUploads = await purgeExpiredLocalDocumentFiles();
     audit(req, "admin.maintenance.cleanup", {
       prunedRevoked: prune.removed,
       scrubbedAudit: scrub.scrubbed,
+      purgedUploads: purgedUploads.removed,
     });
-    res.json({ ok: true, prune, scrub });
+    res.json({ ok: true, prune, scrub, purgedUploads });
   })
 );
 
@@ -1675,8 +1798,22 @@ app.post(
   ],
   requireLocalAdmin,
   wrap((req, res) => {
+    const existing = getProject(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Project not found" });
+    const blockingJobs = listDocumentUploadJobsForProject({
+      projectId: existing.id,
+      dossierId: existing.dossierId,
+    }).filter(
+      (job) =>
+        !["deleted", "superseded"].includes(job.recordStatus) &&
+        ["pending", "uploading", "failed"].includes(job.status)
+    );
+    if (blockingJobs.length) {
+      throw badRequest(
+        `Project cannot be archived while ${blockingJobs.length} document sync job(s) are pending or failed.`
+      );
+    }
     const project = setProjectArchived(req.params.id, true);
-    if (!project) return res.status(404).json({ error: "Project not found" });
     audit(req, "admin.project.archive", {
       projectId: project.id,
       name: project.name,
@@ -1705,15 +1842,11 @@ app.post(
 app.get(
   ["/api/admin/overview", "/api/overview"],
   requireLocalAdmin,
-  wrap(async (_req, res) => {
+  wrap((_req, res) => {
     const projects = getAllProjects();
-    const flowConfig = getFlowConfig(process.env);
-
-    if (!flowConfig.getDocumentsUrl) {
-      return res.json({
-        synced: false,
-        generatedAt: new Date().toISOString(),
-        projects: projects.map((project) => ({
+    const overviews = projects.map((project) => {
+      if (!project.dossierId) {
+        return {
           ...buildProjectOverviewBase(project),
           receivedCount: 0,
           completionRate: 0,
@@ -1721,47 +1854,18 @@ app.get(
           completeCompanies: 0,
           incompleteCompanies: 0,
           lastReceptionAt: "",
-          syncError: "GET_DOCUMENTS flow not configured.",
-        })),
-      });
-    }
+          syncError: "Aucun dossierId configure pour ce projet.",
+        };
+      }
 
-    const overviews = await Promise.all(
-      projects.map(async (project) => {
-        if (!project.dossierId) {
-          return {
-            ...buildProjectOverviewBase(project),
-            receivedCount: 0,
-            completionRate: 0,
-            statusKey: "unknown",
-            completeCompanies: 0,
-            incompleteCompanies: 0,
-            lastReceptionAt: "",
-            syncError: "Aucun dossierId configure pour ce projet.",
-          };
-        }
-        try {
-          const rows = await callFlow("GET_DOCUMENTS", flowConfig.getDocumentsUrl, {
-            dossierId: project.dossierId,
-            companyId: "",
-            companyName: "",
-            submissionId: "",
-          });
-          return buildProjectOverview(project, Array.isArray(rows) ? rows : []);
-        } catch (error) {
-          return {
-            ...buildProjectOverviewBase(project),
-            receivedCount: 0,
-            completionRate: 0,
-            statusKey: "unknown",
-            completeCompanies: 0,
-            incompleteCompanies: 0,
-            lastReceptionAt: "",
-            syncError: error?.message || String(error),
-          };
-        }
-      })
-    );
+      const rows = recordsToFlowRows(
+        listDocumentRecordsForProject({
+          projectId: project.id,
+          dossierId: project.dossierId,
+        })
+      );
+      return buildProjectOverview(project, rows);
+    });
 
     res.json({
       synced: true,
@@ -1843,11 +1947,9 @@ app.delete(
 app.post(
   "/api/admin/documents",
   requireLocalAdmin,
-  wrap(async (req, res) => {
-    const flowConfig = getFlowConfig(process.env);
-    ensureFlowUrl(flowConfig.getDocumentsUrl, "GET_DOCUMENTS");
-
+  wrap((req, res) => {
     const payload = {
+      projectId: normalizeTextField(req.body?.projectId, "projectId", { max: 180 }),
       dossierId: normalizeTextField(req.body?.dossierId, "dossierId", {
         required: true,
         max: 180,
@@ -1861,8 +1963,39 @@ app.post(
       }),
     };
 
-    const rows = await callFlow("GET_DOCUMENTS", flowConfig.getDocumentsUrl, payload);
-    res.json(Array.isArray(rows) ? rows : []);
+    res.json(recordsToFlowRows(listDocumentRecordsForProject(payload)));
+  })
+);
+
+app.get(
+  "/api/admin/upload-jobs",
+  requireLocalAdmin,
+  wrap((req, res) => {
+    const projectId = normalizeTextField(req.query?.projectId, "projectId", { max: 180 });
+    const dossierId = normalizeTextField(req.query?.dossierId, "dossierId", { max: 180 });
+    if (!projectId && !dossierId) {
+      throw badRequest("Missing required query: projectId or dossierId");
+    }
+    res.json(
+      listDocumentUploadJobsForProject({
+        projectId,
+        dossierId,
+      })
+    );
+  })
+);
+
+app.post(
+  "/api/admin/document-records/:id/retry",
+  requireLocalAdmin,
+  wrap((req, res) => {
+    const job = retryDocumentRecordSync(req.params.id);
+    if (!job) return res.status(404).json({ error: "Document sync job not found" });
+    audit(req, "admin.document.retry", {
+      recordId: req.params.id,
+      jobId: job.id,
+    });
+    res.json({ ok: true, job });
   })
 );
 
@@ -1880,100 +2013,56 @@ app.post(
   })
 );
 
+// Read-only poll endpoints. Intentionally NOT charged against the
+// per-submission daily budget: the portal polls `documents` every few seconds
+// while a sync is in flight, so charging would exhaust a 300/day budget in
+// ~40 minutes of idle tab time and lock the company out of real operations
+// (upload/update/delete/download). The general /api/portal rate limiter
+// (default 60 req/min) is the right knob for this traffic class.
 app.post(
   "/api/portal/documents",
-  wrap(async (req, res) => {
-    const flowConfig = getFlowConfig(process.env);
-    ensureFlowUrl(flowConfig.getDocumentsUrl, "GET_DOCUMENTS");
-
+  wrap((req, res) => {
     const invitation = getVerifiedInvitationFromBody(req.body);
-    checkSubmissionDailyBudget(invitation, { cost: 1 });
-    const rows = await callFlow("GET_DOCUMENTS", flowConfig.getDocumentsUrl, {
+    const rows = recordsToFlowRows(listDocumentRecordsForInvitation({
+      projectId: invitation.projectId,
+      dossierId: invitation.dossierId,
+      companyId: invitation.companyId,
+      companyName: invitation.companyName,
+      submissionId: invitation.submissionId,
+    }));
+
+    res.json(rows);
+  })
+);
+
+app.post(
+  "/api/portal/upload-jobs",
+  wrap((req, res) => {
+    const invitation = getVerifiedInvitationFromBody(req.body);
+    const records = listDocumentRecordsForInvitation({
+      projectId: invitation.projectId,
       dossierId: invitation.dossierId,
       companyId: invitation.companyId,
       companyName: invitation.companyName,
       submissionId: invitation.submissionId,
     });
-    commitSubmissionDailyBudget(invitation, { cost: 1 });
-
-    res.json(Array.isArray(rows) ? rows : []);
+    res.json(recordsToFlowRows(records));
   })
 );
 
 app.post(
   "/api/portal/upload",
   wrap(async (req, res) => {
-    const flowConfig = getFlowConfig(process.env);
-    ensureFlowUrl(flowConfig.uploadUrl, "UPLOAD_FILE");
-
-    const invitation = getVerifiedInvitationFromBody(req.body);
-    checkSubmissionDailyBudget(invitation, { cost: 2 });
-    const document = resolveInvitationDocument(invitation, req.body?.documentId);
-    const fileName = prefixFileNameWithCompany(
-      normalizeFileName(req.body?.fileName),
-      invitation.companyName
-    );
-    const fileContent = normalizeTextField(req.body?.fileContent, "fileContent", {
-      required: true,
-      max: maxFileContentChars,
-    });
-    const metadata = buildMetadata(invitation, document);
-
-    const result = await callFlow("UPLOAD_FILE", flowConfig.uploadUrl, {
-      fileName,
-      fileContent,
-      folderPath: invitation.folderPath,
-      ...metadata,
-      metadata,
-    });
-    commitSubmissionDailyBudget(invitation, { cost: 2 });
-
-    res.json(result);
+    const result = await queueDocumentUploadFromMultipart(req, "upload");
+    res.status(202).json(result);
   })
 );
 
 app.post(
   "/api/portal/update",
   wrap(async (req, res) => {
-    const flowConfig = getFlowConfig(process.env);
-    ensureFlowUrl(flowConfig.updateUrl, "UPDATE_FILE");
-
-    const invitation = getVerifiedInvitationFromBody(req.body);
-    checkSubmissionDailyBudget(invitation, { cost: 2 });
-    const document = resolveInvitationDocument(invitation, req.body?.documentId);
-    const fileIdentifier = normalizeTextField(req.body?.fileIdentifier, "fileIdentifier", {
-      required: true,
-      max: 1000,
-    });
-    const filePath = await verifyFileReferenceAndDocumentType({
-      flowConfig,
-      invitation,
-      filePath: req.body?.filePath,
-      fileIdentifier,
-      documentId: document.id,
-      requirePath: true,
-    });
-    const fileName = prefixFileNameWithCompany(
-      normalizeFileName(req.body?.fileName),
-      invitation.companyName
-    );
-    const fileContent = normalizeTextField(req.body?.fileContent, "fileContent", {
-      required: true,
-      max: maxFileContentChars,
-    });
-    const metadata = buildMetadata(invitation, document);
-
-    const result = await callFlow("UPDATE_FILE", flowConfig.updateUrl, {
-      fileIdentifier,
-      filePath,
-      fileName,
-      fileContent,
-      ...metadata,
-      metadata,
-    });
-    commitSubmissionDailyBudget(invitation, { cost: 2 });
-
-    res.json(result);
+    const result = await queueDocumentUploadFromMultipart(req, "update");
+    res.status(202).json(result);
   })
 );
 
@@ -1981,30 +2070,29 @@ app.post(
   "/api/portal/delete",
   wrap(async (req, res) => {
     const flowConfig = getFlowConfig(process.env);
-    ensureFlowUrl(flowConfig.deleteUrl, "DELETE_FILE");
-
     const invitation = getVerifiedInvitationFromBody(req.body);
     checkSubmissionDailyBudget(invitation, { cost: 1 });
     const document = resolveInvitationDocument(invitation, req.body?.documentId);
-    const fileIdentifier = normalizeTextField(req.body?.fileIdentifier, "fileIdentifier", {
-      required: true,
-      max: 1000,
-    });
-    await verifyFileReferenceAndDocumentType({
-      flowConfig,
+    const record = resolveLocalRecordReference({
       invitation,
       filePath: req.body?.filePath,
-      fileIdentifier,
+      fileIdentifier: req.body?.fileIdentifier,
       documentId: document.id,
-      requirePath: false,
+      requireDocumentType: true,
     });
 
     const metadata = buildMetadata(invitation, document);
-    const result = await callFlow("DELETE_FILE", flowConfig.deleteUrl, {
-      fileIdentifier,
-      ...metadata,
-      metadata,
-    });
+    let result = { ok: true, localOnly: true };
+    if (record.sharePointFileIdentifier) {
+      ensureFlowUrl(flowConfig.deleteUrl, "DELETE_FILE");
+      result = await callFlow("DELETE_FILE", flowConfig.deleteUrl, {
+        fileIdentifier: record.sharePointFileIdentifier,
+        filePath: record.sharePointFilePath || "",
+        ...metadata,
+        metadata,
+      });
+    }
+    markDocumentRecordDeleted(record.id);
     commitSubmissionDailyBudget(invitation, { cost: 1 });
 
     res.json(result);
@@ -2015,20 +2103,35 @@ app.post(
   "/api/portal/download",
   wrap(async (req, res) => {
     const flowConfig = getFlowConfig(process.env);
-    ensureFlowUrl(flowConfig.downloadUrl, "DOWNLOAD_FILE");
-
     const invitation = getVerifiedInvitationFromBody(req.body);
     checkSubmissionDailyBudget(invitation, { cost: 1 });
-    const filePath = await ensureFileReferenceAllowed({
-      flowConfig,
+    const record = resolveLocalRecordReference({
       invitation,
       filePath: req.body?.filePath,
       fileIdentifier: req.body?.fileIdentifier,
-      requirePath: true,
     });
-    const result = await callDownloadFlow(flowConfig.downloadUrl, {
-      filePath,
-    });
+    let result;
+    try {
+      if (!record.storagePath) {
+        throw new Error("Local file is no longer retained.");
+      }
+      const buffer = await readFile(record.storagePath);
+      result = {
+        success: true,
+        localOnly: true,
+        fileContent: buffer.toString("base64"),
+        filePath: `local:${record.id}`,
+        fileName: record.fileName,
+      };
+    } catch (error) {
+      if (!record.sharePointFilePath) {
+        throw error;
+      }
+      ensureFlowUrl(flowConfig.downloadUrl, "DOWNLOAD_FILE");
+      result = await callDownloadFlow(flowConfig.downloadUrl, {
+        filePath: record.sharePointFilePath,
+      });
+    }
     commitSubmissionDailyBudget(invitation, { cost: 1 });
 
     res.json(result);
@@ -2074,19 +2177,42 @@ if (staticBundle) {
 const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+const uploadWorker = startDocumentUploadWorker({ env: process.env });
 
 // N-08 / N-09: scheduled maintenance. Runs once at startup (after a small
 // delay so it doesn't compete with cold-start traffic) and then every 24h.
 // A single-instance deployment is assumed; for multi-instance, move this
 // to an external cron and call /api/admin/maintenance/cleanup.
 const MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-function runScheduledCleanup() {
+async function purgeExpiredLocalDocumentFiles() {
+  const records = listPurgeableDocumentRecords();
+  let removed = 0;
+  const errors = [];
+
+  for (const record of records) {
+    try {
+      await removeStoredUploadDir(record.id, process.env);
+      markDocumentRecordStoragePurged(record.id);
+      removed += 1;
+    } catch (error) {
+      errors.push({
+        id: record.id,
+        error: error?.message || String(error),
+      });
+    }
+  }
+
+  return { ok: errors.length === 0, removed, errors };
+}
+
+async function runScheduledCleanup() {
   try {
     const prune = pruneRevokedInvitations();
     const scrub = scrubOldAuditPayloads();
-    if (prune.removed || scrub.scrubbed) {
+    const purgedUploads = await purgeExpiredLocalDocumentFiles();
+    if (prune.removed || scrub.scrubbed || purgedUploads.removed) {
       console.log(
-        `[maintenance] pruned ${prune.removed} revoked invitations, scrubbed ${scrub.scrubbed} audit payloads (cutoff ${prune.cutoff})`
+        `[maintenance] pruned ${prune.removed} revoked invitations, scrubbed ${scrub.scrubbed} audit payloads, purged ${purgedUploads.removed} local upload(s) (cutoff ${prune.cutoff})`
       );
     }
   } catch (error) {
@@ -2098,13 +2224,32 @@ maintenanceStartTimer.unref();
 const maintenanceInterval = setInterval(runScheduledCleanup, MAINTENANCE_INTERVAL_MS);
 maintenanceInterval.unref();
 
-function shutdown(signal) {
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`${signal} received, shutting down.`);
   clearTimeout(maintenanceStartTimer);
   clearInterval(maintenanceInterval);
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 10000).unref();
+  // Force-exit watchdog: covers a hung Power Automate call that exceeds the
+  // flow timeout. Generous enough (15s) to let an in-flight upload finish.
+  // The user initiated the shutdown, so exit 0 - exiting 1 would be flagged
+  // as a crash by systemd / NSSM and trigger an auto-restart loop.
+  const watchdog = setTimeout(() => {
+    console.warn("[shutdown] forced exit after timeout.");
+    process.exit(0);
+  }, 15000);
+  watchdog.unref();
+  try {
+    await uploadWorker.stop();
+  } catch (error) {
+    console.warn("[shutdown] worker drain failed:", error?.message || error);
+  }
+  server.close(() => {
+    clearTimeout(watchdog);
+    process.exit(0);
+  });
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => { shutdown("SIGINT"); });
+process.on("SIGTERM", () => { shutdown("SIGTERM"); });

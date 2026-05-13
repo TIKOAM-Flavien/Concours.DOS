@@ -1,5 +1,3 @@
-import { fileToBase64 } from "./files";
-
 function unwrapBody(value) {
   if (value && typeof value === "object" && value.body !== undefined) {
     return value.body;
@@ -94,12 +92,58 @@ async function requestJson(label, path, payload, options = {}) {
   return data;
 }
 
+async function requestMultipart(label, path, formData, options = {}) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      body: formData,
+      ...options,
+    });
+  } catch (err) {
+    rethrowFetchNetworkFailure(label, err);
+  }
+
+  const rawText = await response.text();
+  let parsed = rawText;
+
+  try {
+    parsed = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    parsed = rawText || null;
+  }
+
+  const data = unwrapBody(parsed);
+
+  if (!response.ok) {
+    const message =
+      (data && typeof data === "object" && data.error) ||
+      (data && typeof data === "object" && data.message) ||
+      rawText ||
+      `${response.status} ${response.statusText}`;
+    throw new Error(`${label}: ${message}`);
+  }
+
+  assertSuccessPayload(label, data);
+
+  return data;
+}
+
 function buildSignedLinkPayload(context) {
   return {
     ctx: context.link?.rawCtx,
     sig: context.link?.sig,
     alg: context.link?.alg,
   };
+}
+
+function buildSignedLinkFormData(context) {
+  const formData = new FormData();
+  const signed = buildSignedLinkPayload(context);
+  formData.append("ctx", signed.ctx || "");
+  formData.append("sig", signed.sig || "");
+  formData.append("alg", signed.alg || "HS256");
+  return formData;
 }
 
 export function createPowerAutomateClient() {
@@ -166,42 +210,39 @@ export function createPowerAutomateClient() {
       const payload = isPortalRequest
         ? buildSignedLinkPayload(context)
         : {
+            projectId: context.projectId || "",
             dossierId: context.dossierId,
             companyId: context.companyId || "",
             companyName: context.companyName || "",
             submissionId: context.submissionId || "",
           };
 
-      const data = await requestJson("GET_DOCUMENTS", path, payload, options);
+      const data = await requestJson("LIST_DOCUMENTS", path, payload, options);
       return Array.isArray(data) ? data : [];
     },
 
     async uploadDocument({ context, document, file }, options) {
-      return await requestJson(
+      const formData = buildSignedLinkFormData(context);
+      formData.append("documentId", document.id);
+      formData.append("file", file, file.name);
+      return await requestMultipart(
         "UPLOAD_FILE",
         "/api/portal/upload",
-        {
-          ...buildSignedLinkPayload(context),
-          documentId: document.id,
-          fileName: file.name,
-          fileContent: await fileToBase64(file),
-        },
+        formData,
         options
       );
     },
 
     async updateDocument({ context, document, file, record }, options) {
-      return await requestJson(
+      const formData = buildSignedLinkFormData(context);
+      formData.append("documentId", document.id);
+      formData.append("fileIdentifier", record.fileIdentifier || "");
+      formData.append("filePath", record.filePath || "");
+      formData.append("file", file, file.name);
+      return await requestMultipart(
         "UPDATE_FILE",
         "/api/portal/update",
-        {
-          ...buildSignedLinkPayload(context),
-          documentId: document.id,
-          fileIdentifier: record.fileIdentifier,
-          filePath: record.filePath,
-          fileName: file.name,
-          fileContent: await fileToBase64(file),
-        },
+        formData,
         options
       );
     },

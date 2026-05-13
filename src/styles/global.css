@@ -667,6 +667,18 @@ textarea:focus-visible,
   color: var(--success);
 }
 
+.doc-flag--pending {
+  border-color: #d9c9a3;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.doc-flag--error {
+  border-color: #d9b4b4;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .doc-card__category {
   font-size: 0.68rem;
   font-weight: 700;
@@ -1952,6 +1964,18 @@ textarea:focus-visible,
   color: var(--warning);
 }
 
+.admin-doc-pill--pending {
+  border-color: #d9c9a3;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.admin-doc-pill--error {
+  border-color: #d9b4b4;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .admin-track-card__footer {
   margin: 0;
   font-size: 0.8rem;
@@ -2017,6 +2041,12 @@ textarea:focus-visible,
   border-color: #d9c9a3;
   background: var(--warning-soft);
   color: var(--warning);
+}
+
+.status-pill--danger {
+  border-color: #d9b4b4;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .status-pill--info {

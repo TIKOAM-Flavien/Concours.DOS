@@ -81,6 +81,10 @@ const FIELD_CANDIDATES = {
     "ProjectId",
     "Dossier",
   ],
+  localRecordId: ["localRecordId", "recordId"],
+  localJobId: ["localJobId", "jobId"],
+  syncStatus: ["SyncStatus", "syncStatus", "status"],
+  syncError: ["syncError", "errorMessage", "ErrorMessage"],
 };
 
 function normalizeKey(value) {
@@ -213,6 +217,18 @@ function buildRecord(row, index, documents) {
     ).trim(),
     dossierId: String(
       readFirstMatch(row, FIELD_CANDIDATES.dossierId) || ""
+    ).trim(),
+    localRecordId: String(
+      readFirstMatch(row, FIELD_CANDIDATES.localRecordId) || ""
+    ).trim(),
+    localJobId: String(
+      readFirstMatch(row, FIELD_CANDIDATES.localJobId) || ""
+    ).trim(),
+    syncStatus: String(
+      readFirstMatch(row, FIELD_CANDIDATES.syncStatus) || ""
+    ).trim(),
+    syncError: String(
+      readFirstMatch(row, FIELD_CANDIDATES.syncError) || ""
     ).trim(),
   };
 }

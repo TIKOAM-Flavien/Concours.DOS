@@ -87,6 +87,10 @@ export function resolveLinkContext() {
     brandName: portalEnv.brandName,
     portalTitle: portalEnv.portalTitle,
     portalSubtitle: portalEnv.portalSubtitle,
+    projectId: pickField(
+      structured.projectId,
+      preferStructuredContext ? [] : ["projectId", "projetId"]
+    ),
     contestName: firstValue(
       structured.contestName,
       structured.consultationName,

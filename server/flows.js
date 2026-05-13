@@ -61,7 +61,8 @@ export function getFlowStatus(env = process.env) {
   const config = getFlowConfig(env);
 
   return {
-    documentsEnabled: Boolean(config.getDocumentsUrl),
+    documentsEnabled: true,
+    getDocumentsFlowEnabled: Boolean(config.getDocumentsUrl),
     downloadEnabled: Boolean(config.downloadUrl),
     uploadEnabled: Boolean(config.uploadUrl),
     updateEnabled: Boolean(config.updateUrl),

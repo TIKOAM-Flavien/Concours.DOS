@@ -7,15 +7,23 @@ export default function HistoryTable({
   searchValue,
   onSearchChange,
 }) {
+  const syncLabel = (record) => {
+    if (record.syncStatus === "sync_failed") return "Erreur";
+    if (record.syncStatus === "syncing") return "Synchronisation";
+    if (record.syncStatus === "sync_pending") return "En attente";
+    if (record.syncStatus === "synced") return "Synchronise";
+    return "Local";
+  };
+
   return (
     <section className="history-panel">
       <div className="section-head">
         <div>
-          <p className="eyebrow">SharePoint</p>
-          <h2>Historique des fichiers deja presents</h2>
+          <p className="eyebrow">VPS</p>
+          <h2>Historique des fichiers recus</h2>
           <p className="section-copy">
-            Cette vue permet de verifier les documents remontes par
-            GET_DOCUMENTS pour l'entreprise courante.
+            Cette vue affiche les documents enregistres localement pour
+            l'entreprise courante.
           </p>
         </div>
 
@@ -63,7 +71,7 @@ export default function HistoryTable({
                 <th>Entreprise</th>
                 <th>Derniere modif</th>
                 <th>Taille</th>
-                <th>SharePoint</th>
+                <th>Synchronisation</th>
               </tr>
             </thead>
             <tbody>
@@ -75,12 +83,12 @@ export default function HistoryTable({
                   <td>{formatDateTime(record.modifiedAt)}</td>
                   <td>{formatBytes(record.sizeBytes)}</td>
                   <td>
-                    {record.link ? (
+                    {record.link && record.syncStatus === "synced" ? (
                       <a href={record.link} target="_blank" rel="noreferrer">
-                        Ouvrir
+                        {syncLabel(record)}
                       </a>
                     ) : (
-                      "n.c."
+                      syncLabel(record)
                     )}
                   </td>
                 </tr>
@@ -90,7 +98,7 @@ export default function HistoryTable({
         </div>
       ) : (
         <div className="empty-state">
-          Aucun fichier SharePoint ne correspond encore a ce lien entreprise.
+          Aucun fichier local ne correspond encore a ce lien entreprise.
         </div>
       )}
     </section>

@@ -281,7 +281,7 @@ async function assessAccess(context, client) {
     label: "Lien signe actif",
     title: "Acces securise",
     message:
-      "Le lien signe a ete controle cote serveur. Les operations documentaires repassent aussi par le serveur avant appel aux flows.",
+      "Le lien signe a ete controle cote serveur. Les depots sont stockes sur le VPS puis synchronises en arriere-plan.",
     trustedContext: true,
     limits: serverVerification?.limits || {},
   };
@@ -328,7 +328,7 @@ export default function App() {
       });
     } catch (error) {
       setPageState("error");
-      setPageError(error.message || "Lecture SharePoint impossible.");
+      setPageError(error.message || "Lecture du stockage local impossible.");
     }
   }
 
@@ -368,6 +368,79 @@ export default function App() {
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  // Poll for sync status while at least one record is non-terminal. The
+  // worker uploads to SharePoint asynchronously after the 202 ACK, so without
+  // this the badge stays "Recu localement" until the visitor reloads.
+  //
+  // Polling rules:
+  // - paused while the tab is hidden (no point spending requests on an
+  //   unattended tab; we catch up on visibilitychange),
+  // - exponential backoff (5s -> 10s -> 20s -> 40s, capped at 60s) so a job
+  //   that retries every 15 minutes does not generate hundreds of polls,
+  // - hard stop after ~10 minutes of continuous polling so a wedged job
+  //   cannot DoS the server's general /api/portal limiter. After that, the
+  //   user can refresh manually or reload the page.
+  const hasInFlightSync = useMemo(
+    () =>
+      records.some((record) =>
+        ["sync_pending", "syncing"].includes(record.syncStatus)
+      ),
+    [records]
+  );
+  useEffect(() => {
+    if (!hasInFlightSync) return undefined;
+    if (accessState.status !== "trusted") return undefined;
+    if (typeof window === "undefined") return undefined;
+
+    let cancelled = false;
+    let timer = null;
+    let delay = 5000;
+    const maxDelay = 60000;
+    const startedAt = Date.now();
+    const maxRunMs = 10 * 60 * 1000;
+
+    const isHidden = () =>
+      typeof document !== "undefined" && document.visibilityState === "hidden";
+
+    function tick() {
+      if (cancelled) return;
+      if (Date.now() - startedAt > maxRunMs) {
+        cancelled = true;
+        return;
+      }
+      if (isHidden()) {
+        schedule(delay);
+        return;
+      }
+      refreshRecords({ quiet: true });
+      delay = Math.min(maxDelay, delay * 2);
+      schedule(delay);
+    }
+
+    function schedule(ms) {
+      if (cancelled) return;
+      timer = window.setTimeout(tick, ms);
+    }
+
+    function onVisibility() {
+      if (cancelled) return;
+      if (!isHidden()) {
+        if (timer) window.clearTimeout(timer);
+        delay = 5000;
+        tick();
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisibility);
+    schedule(delay);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasInFlightSync, accessState.status]);
 
   useEffect(() => {
     return () => {
@@ -541,8 +614,8 @@ export default function App() {
 
       setNotice({
         tone: "success",
-        title: replacing ? "Piece remplacee" : "Piece deposee",
-        message: `${document.label} envoye.`,
+        title: replacing ? "Piece remplacee" : "Piece recue",
+        message: `${document.label} recu localement. Synchronisation en arriere-plan.`,
       });
 
       await refreshRecords({ quiet: true });

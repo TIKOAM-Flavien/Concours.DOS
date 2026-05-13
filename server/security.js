@@ -108,6 +108,7 @@ export function canonicalJson(value) {
 
 export function sanitizeInvitationContext(rawContext = {}) {
   return {
+    projectId: cleanString(rawContext.projectId),
     companyId: cleanString(rawContext.companyId),
     companyName: cleanString(rawContext.companyName),
     companyEmail: cleanString(rawContext.companyEmail),

@@ -179,6 +179,24 @@ function trackingStatusClassName(statusKey) {
   return "status-pill";
 }
 
+function documentSyncClassName(record) {
+  if (!record) return "admin-doc-pill admin-doc-pill--missing";
+  if (record.syncStatus === "sync_failed") return "admin-doc-pill admin-doc-pill--error";
+  if (record.syncStatus === "sync_pending" || record.syncStatus === "syncing") {
+    return "admin-doc-pill admin-doc-pill--pending";
+  }
+  return "admin-doc-pill admin-doc-pill--done";
+}
+
+function documentSyncLabel(record) {
+  if (!record) return "";
+  if (record.syncStatus === "sync_failed") return " - erreur sync";
+  if (record.syncStatus === "syncing") return " - sync en cours";
+  if (record.syncStatus === "sync_pending") return " - sync en attente";
+  if (record.syncStatus === "synced") return " - synchronise";
+  return "";
+}
+
 const OVERVIEW_STATUS_LABELS = {
   complete: "Complet",
   almost: "Presque complet",
@@ -527,6 +545,7 @@ export default function AdminApp() {
 
       try {
         const rows = await client.listDocuments({
+          projectId: selectedProject.id,
           dossierId: selectedProject.dossierId,
           companyId: "",
           companyName: "",
@@ -550,7 +569,7 @@ export default function AdminApp() {
         setSyncState({
           status: "error",
           records: [],
-          error: error.message || "Lecture SharePoint impossible.",
+          error: error.message || "Lecture du stockage local impossible.",
         });
       }
     }
@@ -567,6 +586,71 @@ export default function AdminApp() {
     signingState.flows.documentsEnabled,
     trackingRefreshKey,
   ]);
+
+  // Auto-refresh the tracking section while at least one record is still
+  // mid-sync. The worker uploads asynchronously after the portal ACKs the
+  // file, so without this the admin must click "Actualiser" to see when
+  // `syncing` / `sync_pending` flips to `synced`. Backoff + visibility
+  // gating mirror the portal-side polling for the same reasons.
+  const hasInFlightAdminSync = useMemo(
+    () =>
+      syncState.records.some((record) =>
+        ["sync_pending", "syncing"].includes(record.syncStatus)
+      ),
+    [syncState.records]
+  );
+  useEffect(() => {
+    if (!hasInFlightAdminSync) return undefined;
+    if (!selectedProject) return undefined;
+    if (typeof window === "undefined") return undefined;
+
+    let cancelled = false;
+    let timer = null;
+    let delay = 5000;
+    const maxDelay = 60000;
+    const startedAt = Date.now();
+    const maxRunMs = 15 * 60 * 1000;
+
+    const isHidden = () =>
+      typeof document !== "undefined" && document.visibilityState === "hidden";
+
+    function schedule(ms) {
+      if (cancelled) return;
+      timer = window.setTimeout(tick, ms);
+    }
+
+    function tick() {
+      if (cancelled) return;
+      if (Date.now() - startedAt > maxRunMs) {
+        cancelled = true;
+        return;
+      }
+      if (isHidden()) {
+        schedule(delay);
+        return;
+      }
+      setTrackingRefreshKey((current) => current + 1);
+      delay = Math.min(maxDelay, delay * 2);
+      schedule(delay);
+    }
+
+    function onVisibility() {
+      if (cancelled) return;
+      if (!isHidden()) {
+        if (timer) window.clearTimeout(timer);
+        delay = 5000;
+        tick();
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisibility);
+    schedule(delay);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [hasInFlightAdminSync, selectedProject]);
 
   const companyTracking = useMemo(() => {
     if (!selectedProject) return [];
@@ -1218,6 +1302,25 @@ export default function AdminApp() {
     }
   }
 
+  async function handleRetryDocumentSync(record) {
+    if (!record?.localRecordId) return;
+    try {
+      await api.retryDocumentSync(record.localRecordId);
+      setNotice({
+        tone: "success",
+        title: "Synchronisation relancee",
+        message: `${record.fileName || "Document"} est remis dans la file worker.`,
+      });
+      setTrackingRefreshKey((current) => current + 1);
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        title: "Relance impossible",
+        message: error.message || "Impossible de relancer la synchronisation.",
+      });
+    }
+  }
+
   async function handleProjectSubmit(event) {
     event.preventDefault();
 
@@ -1608,11 +1711,11 @@ export default function AdminApp() {
             </strong>
           </div>
           <div className="summary-card">
-            <span className="summary-card__label">Suivi SharePoint</span>
+            <span className="summary-card__label">Stockage VPS</span>
             <strong className="summary-card__value summary-card__value--small">
               {signingState.flows.documentsEnabled
-                ? "Synchronisation active"
-                : "Flow absent"}
+                ? "Source locale active"
+                : "Indisponible"}
             </strong>
           </div>
         </div>
@@ -1800,7 +1903,7 @@ export default function AdminApp() {
                     : overviewState.status === "error"
                     ? overviewState.error || "Synchronisation impossible."
                     : !overviewState.synced && overviewState.status === "ready"
-                    ? "Vue d'ensemble degradee : flow GET_DOCUMENTS non disponible."
+                    ? "Vue d'ensemble degradee : stockage local indisponible."
                     : overviewState.generatedAt
                     ? `Mise a jour : ${formatDateTime(overviewState.generatedAt)}`
                     : "Cliquez sur Actualiser pour charger l'etat des projets."}
@@ -2163,8 +2266,8 @@ export default function AdminApp() {
                   onClick={() => setTrackingRefreshKey((current) => current + 1)}
                   title={
                     !signingState.flows.documentsEnabled
-                      ? "Flow de suivi non configure."
-                      : "Relance la synchronisation SharePoint pour le projet actif."
+                      ? "Stockage local indisponible."
+                      : "Recharge l'etat local du projet actif."
                   }
                 >
                   {syncState.status === "loading" ? "Actualisation..." : "Actualiser"}
@@ -2173,10 +2276,10 @@ export default function AdminApp() {
                   {syncState.status === "loading"
                     ? "Synchronisation..."
                     : syncState.status === "error"
-                    ? "Erreur de suivi"
+                    ? "Erreur stockage local"
                     : signingState.flows.documentsEnabled
-                    ? "Flux reception actif"
-                    : "Flow non configure"}
+                    ? "Stockage local actif"
+                    : "Stockage indisponible"}
                 </div>
               </div>
             </div>
@@ -2347,13 +2450,11 @@ export default function AdminApp() {
                           {company.documentState.map((item) => (
                             <span
                               key={`${company.id}-${item.document.id}`}
-                              className={
-                                item.latest
-                                  ? "admin-doc-pill admin-doc-pill--done"
-                                  : "admin-doc-pill admin-doc-pill--missing"
-                              }
+                              className={documentSyncClassName(item.latest)}
+                              title={item.latest?.syncError || ""}
                             >
                               {item.document.label}
+                              {documentSyncLabel(item.latest)}
                             </span>
                           ))}
                         </div>
@@ -2438,6 +2539,8 @@ export default function AdminApp() {
                       <th>Entreprise</th>
                       <th>Piece</th>
                       <th>Fichier</th>
+                      <th>Sync</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2447,6 +2550,34 @@ export default function AdminApp() {
                         <td>{record.companyName || record.companyId || "Entreprise non identifiee"}</td>
                         <td>{record.documentType || "Type non reconnu"}</td>
                         <td>{record.fileName || record.filePath || "Fichier non nomme"}</td>
+                        <td>
+                          <span className={
+                            record.syncStatus === "sync_failed"
+                              ? "status-pill status-pill--danger"
+                              : record.syncStatus === "synced"
+                              ? "status-pill status-pill--success"
+                              : "status-pill status-pill--warning"
+                          }>
+                            {record.syncStatus === "sync_failed"
+                              ? "Erreur"
+                              : record.syncStatus === "synced"
+                              ? "Synchronise"
+                              : "En attente"}
+                          </span>
+                        </td>
+                        <td>
+                          {record.syncStatus === "sync_failed" ? (
+                            <button
+                              type="button"
+                              className="btn btn--ghost"
+                              onClick={() => handleRetryDocumentSync(record)}
+                            >
+                              Relancer
+                            </button>
+                          ) : (
+                            "n.c."
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

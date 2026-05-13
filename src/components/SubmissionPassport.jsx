@@ -22,7 +22,7 @@ export default function SubmissionPassport({
   return (
     <aside className="passport">
       <p className="eyebrow eyebrow--dark">Passeport de depot</p>
-      <h2 className="passport__title">Lien entreprise et metadonnees SharePoint</h2>
+      <h2 className="passport__title">Lien entreprise et metadonnees depot</h2>
       <p className="passport__summary">
         Chaque document deverse est rattache automatiquement a l'entreprise,
         au type de piece et a la soumission. Les noms de fichiers restent
@@ -80,8 +80,8 @@ export default function SubmissionPassport({
         </p>
         <small>
           {lastSync
-            ? `Derniere lecture SharePoint : ${lastSync}`
-            : "Aucune synchronisation SharePoint pour l'instant."}
+            ? `Derniere lecture locale : ${lastSync}`
+            : "Aucune lecture locale pour l'instant."}
         </small>
       </div>
     </aside>

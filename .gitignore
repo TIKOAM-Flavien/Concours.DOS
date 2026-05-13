@@ -7,6 +7,11 @@ dist-all/
 server/admin.db
 server/admin.db-wal
 server/admin.db-shm
+server/uploads/
+
+# Docker build secrets / per-env overrides (never commit).
+.env.production
+.env.vite.build
 
 # Local/IDE artifacts (keep repo deployable)
 .cursor/
