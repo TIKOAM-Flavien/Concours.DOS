@@ -1,20 +1,14 @@
 import { statfs } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
 import rateLimit from "express-rate-limit";
 import { resolveDocumentList } from "../../src/config/documentCatalog.js";
-import { isDocumentReviewStatus } from "../../shared/documentReview.js";
-import { readAdminSession } from "../adminAuth.js";
+import { registerAdminDocumentRoutes } from "./adminDocumentRoutes.js";
 import {
   deleteCompany as removeCompany,
   deleteProject as removeProject,
   getAllProjects,
   getProject,
   listDocumentRecordsForProject,
-  listDocumentRecordsForProjectWithHistory,
   sumStoredDocumentBytes,
-  getDocumentRecordById,
-  updateDocumentRecordReview,
-  listDocumentUploadJobsForProject,
   listRevokedInvitations,
   getSignedInvitationById,
   findReusableSignedInvitation,
@@ -54,7 +48,6 @@ export function registerAdminRoutes(app, ctx) {
     wrap,
     badRequest,
     serviceUnavailable,
-    requireLocalAdmin,
     requireAdminAuth,
     buildAdminAuthSessionResponse,
     loginAdmin,
@@ -64,7 +57,6 @@ export function registerAdminRoutes(app, ctx) {
     sanitizeProjectPayload,
     sanitizeCompanyPayload,
     recordsToFlowRows,
-    documentRecordToFlowRow,
     resolvePortalEntryUrl,
     buildAdminSecurityResponse,
     signInvitationForCompany,
@@ -122,7 +114,10 @@ export function registerAdminRoutes(app, ctx) {
     logoutAdmin(req, res);
   }));
 
-  app.get("/api/admin-debug-ip", (req, res) => {
+  app.get("/api/admin-debug-ip", requireAdminAuth, (req, res) => {
+    if (env.NODE_ENV === "production") {
+      return res.status(404).end();
+    }
     res.json({
       actorIp: ctx.getActorIp(req),
       reqIp: req.ip,
@@ -783,116 +778,5 @@ export function registerAdminRoutes(app, ctx) {
     })
   );
 
-  app.post(
-    "/api/admin/documents",
-    requireAdminAuth,
-    wrap(async (req, res) => {
-      const payload = {
-        projectId: normalizeTextField(req.body?.projectId, "projectId", { max: 180 }),
-        dossierId: normalizeTextField(req.body?.dossierId, "dossierId", {
-          required: true,
-          max: 180,
-        }),
-        companyId: normalizeTextField(req.body?.companyId, "companyId", { max: 120 }),
-        companyName: normalizeTextField(req.body?.companyName, "companyName", {
-          max: 180,
-        }),
-        submissionId: normalizeTextField(req.body?.submissionId, "submissionId", {
-          max: 180,
-        }),
-      };
-
-      res.json(recordsToFlowRows(await listDocumentRecordsForProjectWithHistory(payload)));
-    })
-  );
-
-  app.post(
-    "/api/admin/documents/:recordId/download",
-    requireAdminAuth,
-    wrap(async (req, res) => {
-      const record = await getDocumentRecordById(req.params.recordId);
-      if (!record || ["deleted", "superseded"].includes(record.status)) {
-        return res.status(404).json({ error: "Document introuvable." });
-      }
-      if (!record.storagePath) {
-        return res.status(410).json({ error: "Fichier local plus disponible sur le serveur." });
-      }
-
-      const buffer = await readFile(record.storagePath);
-      await audit(req, "admin.document.download", {
-        recordId: record.id,
-        projectId: record.projectId,
-        companyId: record.companyId,
-        documentType: record.documentType,
-      });
-
-      res.json({
-        success: true,
-        fileContent: buffer.toString("base64"),
-        fileName: record.fileName || record.originalFileName,
-        mimeType: record.mimeType || "",
-        reviewStatus: record.reviewStatus || "pending",
-      });
-    })
-  );
-
-  app.patch(
-    "/api/admin/documents/:recordId/review",
-    requireAdminAuth,
-    wrap(async (req, res) => {
-      const reviewStatus = String(req.body?.reviewStatus || "").trim();
-      if (!isDocumentReviewStatus(reviewStatus)) {
-        throw badRequest("reviewStatus must be pending, accepted, or rejected.");
-      }
-
-      const record = await getDocumentRecordById(req.params.recordId);
-      if (!record || ["deleted", "superseded"].includes(record.status)) {
-        return res.status(404).json({ error: "Document introuvable." });
-      }
-
-      const session = readAdminSession(req, env);
-      const reviewedBy = session?.username || "admin";
-      const reviewComment = normalizeTextField(req.body?.reviewComment, "reviewComment", {
-        max: 2000,
-      });
-
-      const updated = await updateDocumentRecordReview(record.id, {
-        reviewStatus,
-        reviewComment,
-        reviewedBy,
-      });
-      if (!updated) {
-        return res.status(404).json({ error: "Document introuvable." });
-      }
-
-      await audit(req, "admin.document.review", {
-        recordId: updated.id,
-        projectId: updated.projectId,
-        companyId: updated.companyId,
-        documentType: updated.documentType,
-        reviewStatus,
-        reviewedBy,
-      });
-
-      res.json(documentRecordToFlowRow(updated));
-    })
-  );
-
-  app.get(
-    "/api/admin/upload-jobs",
-    requireAdminAuth,
-    wrap(async (req, res) => {
-      const projectId = normalizeTextField(req.query?.projectId, "projectId", { max: 180 });
-      const dossierId = normalizeTextField(req.query?.dossierId, "dossierId", { max: 180 });
-      if (!projectId && !dossierId) {
-        throw badRequest("Missing required query: projectId or dossierId");
-      }
-      res.json(
-        await listDocumentUploadJobsForProject({
-          projectId,
-          dossierId,
-        })
-      );
-    })
-  );
+  registerAdminDocumentRoutes(app, ctx);
 }

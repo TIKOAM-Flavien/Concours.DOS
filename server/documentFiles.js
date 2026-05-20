@@ -1,23 +1,16 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, open, rm, stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Busboy from "busboy";
+import { fileTypeFromBuffer } from "file-type";
+
+import { cleanString, parseStrictPositiveInt as parsePositiveInt } from "./lib/coercions.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, "..");
-
-function cleanString(value) {
-  return String(value || "").trim();
-}
-
-function parsePositiveInt(value, fallback = 0) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
 
 function safeDiskFileName(value, fallback = "upload.bin") {
   const base = cleanString(value).split(/[\\/]/).pop() || fallback;
@@ -50,6 +43,64 @@ export async function removeStoredUploadDir(uploadId, env = process.env) {
   const target = resolve(stagingDir, safeDiskFileName(uploadId, "upload"));
   if (!isWithinDirectory(stagingDir, target)) return;
   await rm(target, { recursive: true, force: true });
+}
+
+// MIME types we never accept regardless of what the client claims.
+// HTML/SVG/JS/JAR can carry active content; executables are obvious; archives
+// were never an authorized format and we don't want them sneaking in.
+const DISALLOWED_DETECTED_MIME_TYPES = new Set([
+  "text/html",
+  "image/svg+xml",
+  "application/x-msdownload",
+  "application/x-dosexec",
+  "application/x-executable",
+  "application/x-sharedlib",
+  "application/x-mach-binary",
+  "application/java-archive",
+  "application/x-rar-compressed",
+  "application/x-7z-compressed",
+]);
+
+async function sniffFileMimeType(filePath) {
+  // file-type only needs the first ~4100 bytes to identify the format.
+  let handle = null;
+  try {
+    handle = await open(filePath, "r");
+    const buffer = Buffer.alloc(4100);
+    const { bytesRead } = await handle.read(buffer, 0, 4100, 0);
+    if (!bytesRead) return { mimeType: "", extension: "" };
+    const detected = await fileTypeFromBuffer(buffer.subarray(0, bytesRead));
+    if (!detected) return { mimeType: "", extension: "" };
+    return { mimeType: detected.mime, extension: detected.ext };
+  } catch {
+    return { mimeType: "", extension: "" };
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+function assertSafeUploadType({ originalFileName, claimedMimeType, detection }) {
+  if (detection.mimeType && DISALLOWED_DETECTED_MIME_TYPES.has(detection.mimeType)) {
+    const error = new Error(
+      `File type ${detection.mimeType} is not allowed (rejected by server-side MIME sniff).`
+    );
+    error.statusCode = 415;
+    throw error;
+  }
+  // A file announced as a PDF but detected as a PE/ELF executable, an HTML
+  // payload, or an image is a clear spoofing attempt. file-type returning
+  // nothing (text/CSV) is fine — we just keep the client claim.
+  if (detection.mimeType && claimedMimeType) {
+    const claimed = claimedMimeType.toLowerCase();
+    const detected = detection.mimeType.toLowerCase();
+    if (claimed === "application/pdf" && detected !== "application/pdf") {
+      const error = new Error(
+        `Upload "${originalFileName}" was sent with Content-Type application/pdf but real type is ${detected}.`
+      );
+      error.statusCode = 415;
+      throw error;
+    }
+  }
 }
 
 export async function parseMultipartFileUpload(req, {
@@ -150,11 +201,18 @@ export async function parseMultipartFileUpload(req, {
         out.on("finish", async () => {
           try {
             const written = await stat(storagePath);
+            const claimedMimeType = cleanString(info.mimeType);
+            const detection = await sniffFileMimeType(storagePath);
+            assertSafeUploadType({ originalFileName, claimedMimeType, detection });
             resolveFile({
               originalFileName,
               diskFileName,
               storagePath,
-              mimeType: cleanString(info.mimeType),
+              // Prefer the type detected from the file's magic bytes over the
+              // client-supplied header — the latter is trivially spoofable.
+              mimeType: detection.mimeType || claimedMimeType,
+              claimedMimeType,
+              detectedMimeType: detection.mimeType || "",
               sizeBytes: written.size || sizeBytes,
               sha256: hash.digest("hex"),
             });

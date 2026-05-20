@@ -66,7 +66,15 @@ export default function FilePreviewModal({
           ) : isImage && blobUrl ? (
             <img className="modal-image" src={blobUrl} alt={fileName} />
           ) : isPdf && blobUrl ? (
-            <iframe className="modal-iframe" title={fileName || "Apercu PDF"} src={blobUrl} />
+            // allow-scripts is required by Chrome's built-in PDF viewer; we
+            // deliberately omit allow-same-origin so a malicious PDF can't
+            // touch the parent page (cookies, DOM, fetch as the user).
+            <iframe
+              className="modal-iframe"
+              title={fileName || "Apercu PDF"}
+              src={blobUrl}
+              sandbox="allow-scripts"
+            />
           ) : (
             <div className="modal-placeholder">
               Apercu securise indisponible pour ce format.

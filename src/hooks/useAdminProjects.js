@@ -30,6 +30,7 @@ import {
   uniqueSuffix,
 } from "../lib/adminUtils.js";
 import * as api from "../lib/adminApi.js";
+import { useAdminInvitationStatuses } from "./useAdminInvitationStatuses.js";
 import { useModalLock } from "./useModalLock.js";
 
 export function useAdminProjects({
@@ -54,14 +55,14 @@ export function useAdminProjects({
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [selectedCompanyIds, setSelectedCompanyIds] = useState(() => new Set());
   const [emailSending, setEmailSending] = useState(null);
-  const [invitationStatusByCompanyId, setInvitationStatusByCompanyId] = useState({});
   const [directorySearch, setDirectorySearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const firstLoadRef = useRef(true);
   const projectsRequestIdRef = useRef(0);
   const projectsAbortRef = useRef(null);
-  const invitationStatusRequestIdRef = useRef(0);
-  const invitationStatusAbortRef = useRef(null);
+
+  const { invitationStatusByCompanyId, refreshInvitationStatuses } =
+    useAdminInvitationStatuses(selectedProjectId);
 
   const refreshProjects = useCallback(async () => {
     const requestId = projectsRequestIdRef.current + 1;
@@ -96,54 +97,6 @@ export function useAdminProjects({
       }
     }
   }, [setNotice, showArchived]);
-
-  const refreshInvitationStatuses = useCallback(async () => {
-    const requestId = invitationStatusRequestIdRef.current + 1;
-    invitationStatusRequestIdRef.current = requestId;
-
-    if (invitationStatusAbortRef.current) {
-      invitationStatusAbortRef.current.abort();
-      invitationStatusAbortRef.current = null;
-    }
-
-    if (!selectedProjectId) {
-      setInvitationStatusByCompanyId({});
-      return;
-    }
-
-    const controller = new AbortController();
-    invitationStatusAbortRef.current = controller;
-
-    try {
-      const data = await api.fetchProjectInvitations(selectedProjectId, {
-        signal: controller.signal,
-      });
-      if (
-        controller.signal.aborted ||
-        requestId !== invitationStatusRequestIdRef.current
-      ) {
-        return;
-      }
-      const map = {};
-      for (const item of data.items || []) {
-        if (item.companyId) map[item.companyId] = item;
-      }
-      setInvitationStatusByCompanyId(map);
-    } catch (error) {
-      if (
-        error?.name === "AbortError" ||
-        requestId !== invitationStatusRequestIdRef.current
-      ) {
-        return;
-      }
-      console.warn("Failed to load invitation statuses:", error);
-      setInvitationStatusByCompanyId({});
-    } finally {
-      if (invitationStatusAbortRef.current === controller) {
-        invitationStatusAbortRef.current = null;
-      }
-    }
-  }, [selectedProjectId]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) || null,
@@ -207,10 +160,6 @@ export function useAdminProjects({
   }, [defaultFolderPath, projects, selectedProjectId]);
 
   useEffect(() => {
-    refreshInvitationStatuses();
-  }, [refreshInvitationStatuses]);
-
-  useEffect(() => {
     const validIds = new Set((selectedProject?.companies || []).map((company) => company.id));
     setSelectedCompanyIds((current) => {
       if (!current.size) return current;
@@ -245,10 +194,6 @@ export function useAdminProjects({
       if (projectsAbortRef.current) {
         projectsAbortRef.current.abort();
         projectsAbortRef.current = null;
-      }
-      if (invitationStatusAbortRef.current) {
-        invitationStatusAbortRef.current.abort();
-        invitationStatusAbortRef.current = null;
       }
     };
   }, []);

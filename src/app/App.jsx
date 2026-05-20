@@ -1,10 +1,16 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import AccessGateScreen from "../components/AccessGateScreen";
 import AppVersion from "../components/AppVersion";
 import DocumentCard from "../components/DocumentCard";
 import FilePreviewModal from "../components/FilePreviewModal";
 import StatusBanner from "../components/StatusBanner";
 import { portalEnv } from "../config/env";
+import {
+  buildCompanyFacts,
+  getMailtoHref,
+  getSecureWebsiteUrl,
+} from "../lib/companyContext";
 import {
   fileMatchesAcceptedFormats,
   formatAcceptedFormats,
@@ -18,217 +24,7 @@ import {
   buildDocumentState,
   normalizeDocumentRecords,
 } from "../lib/documentRecords";
-
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
-}
-
-function getMailtoHref(value) {
-  const email = String(value || "").trim();
-  return isValidEmail(email) ? `mailto:${email}` : "";
-}
-
-function getSecureWebsiteUrl(value) {
-  try {
-    const url = new URL(String(value || "").trim());
-    return url.protocol === "https:" ? url.toString() : "";
-  } catch {
-    return "";
-  }
-}
-
-function buildCompanyFacts(context, trustedContext) {
-  if (!trustedContext) {
-    return [
-      {
-        label: "Mode d'acces",
-        value: "Invitation signee requise",
-      },
-      context.supportEmail
-        ? {
-            label: "Support",
-            value: context.supportEmail,
-          }
-        : null,
-    ].filter(Boolean);
-  }
-
-  return [
-    context.companyId
-      ? {
-          label: "Reference entreprise",
-          value: context.companyId,
-        }
-      : null,
-    context.contactName
-      ? {
-          label: "Contact",
-          value: context.contactName,
-        }
-      : null,
-    context.companyEmail
-      ? {
-          label: "Email",
-          value: context.companyEmail,
-        }
-      : null,
-    context.contestName
-      ? {
-          label: "Consultation",
-          value: context.contestName,
-        }
-      : null,
-  ].filter(Boolean);
-}
-
-function AccessGateScreen({ status, title, message }) {
-  // Defense-in-depth: when the link is missing/invalid/expired we render a
-  // minimal, brand-less screen. No company info, no support email, no portal
-  // shell. The prod server already returns a 403 before this code runs; this
-  // is the last fallback if a stale HTML is served from cache or a future
-  // regression reintroduces a bypass.
-  const isChecking = status === "checking";
-  return (
-    <div
-      role="alert"
-      aria-live="assertive"
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#f6f7fb",
-        color: "#182033",
-        fontFamily: "Arial, sans-serif",
-        padding: "2rem",
-      }}
-    >
-      <main
-        style={{
-          maxWidth: 540,
-          width: "100%",
-          padding: "2rem",
-          background: "#fff",
-          borderRadius: 14,
-          boxShadow: "0 14px 30px rgba(16, 24, 40, 0.1)",
-          textAlign: "left",
-        }}
-      >
-        <h1 style={{ margin: "0 0 0.75rem", fontSize: "1.4rem" }}>
-          {isChecking ? "Verification en cours" : title}
-        </h1>
-        <p style={{ margin: 0, lineHeight: 1.5 }}>
-          {isChecking
-            ? "Controle du lien securise en cours."
-            : message}
-        </p>
-      </main>
-    </div>
-  );
-}
-
-function accessFailureFromServer(error) {
-  const message = String(error?.message || "");
-  const lower = message.toLowerCase();
-
-  if (lower.includes("missing_secret")) {
-    return {
-      label: "Signature indisponible",
-      title: "Configuration serveur incomplete",
-      message:
-        "La signature serveur n'est pas configuree. Contactez l'administrateur du portail.",
-    };
-  }
-
-  if (lower.includes("expired")) {
-    return {
-      label: "Lien expire",
-      title: "Invitation expiree",
-      message:
-        "La validite de ce lien est depassee. Un nouveau lien signe est necessaire pour continuer.",
-    };
-  }
-
-  if (lower.includes("deadline_passed")) {
-    return {
-      label: "Echeance depassee",
-      title: "Date limite atteinte",
-      message:
-        "La date limite de depot est passee. Le portail n'est plus accessible pour cette invitation.",
-    };
-  }
-
-  if (lower.includes("invalid_sig") || lower.includes("invalid signed")) {
-    return {
-      label: "Signature invalide",
-      title: "Lien non valide",
-      message:
-        "Le serveur n'a pas confirme la signature de ce lien. Utilisez le lien complet transmis par l'administrateur.",
-    };
-  }
-
-  return {
-    label: "Verification refusee",
-    title: "Acces non confirme",
-    message:
-      "Le serveur n'a pas confirme ce lien de depot. Utilisez le lien complet transmis par l'administrateur ou contactez le support.",
-  };
-}
-
-async function assessAccess(context, client) {
-  const inv = context.link?.inv;
-  const sig = context.link?.sig;
-  const alg = String(context.link?.alg || "HS256").trim().toUpperCase();
-
-  if (!inv || !sig) {
-    return {
-      status: "blocked",
-      tone: "error",
-      label: "Lien securise requis",
-      title: "Acces restreint",
-      message:
-        "Ce portail de production n'accepte que des invitations signees. Utilisez le lien complet transmis par l'administrateur.",
-      trustedContext: false,
-    };
-  }
-
-  if (alg !== "HS256") {
-    return {
-      status: "blocked",
-      tone: "error",
-      label: "Algorithme refuse",
-      title: "Lien non conforme",
-      message:
-        "Le format de signature du lien n'est pas supporte. Demandez une nouvelle invitation.",
-      trustedContext: false,
-    };
-  }
-
-  let serverVerification = null;
-  try {
-    serverVerification = await client.verifyInvitation(context);
-  } catch (error) {
-    const failure = accessFailureFromServer(error);
-    return {
-      status: "blocked",
-      tone: "error",
-      trustedContext: false,
-      ...failure,
-    };
-  }
-
-  return {
-    status: "trusted",
-    tone: "success",
-    label: "Lien signe actif",
-    title: "Acces securise",
-    message:
-      "Le lien signe a ete controle cote serveur. Les depots sont stockes sur le VPS puis synchronises en arriere-plan.",
-    trustedContext: true,
-    limits: serverVerification?.limits || {},
-    invitation: serverVerification?.invitation || null,
-  };
-}
+import { assessAccess } from "../lib/portalAccess";
 
 export default function App() {
   const [context, setContext] = useState(() => resolveLinkContext());

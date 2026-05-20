@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import AppVersion from "../components/AppVersion";
 import AdminLogin from "../components/AdminLogin";
-import AdminDocumentReviewModal from "../components/admin/AdminDocumentReviewModal";
 import AdminHistoryPanel from "../components/admin/AdminHistoryPanel";
 import AdminInvitationsPanel from "../components/admin/AdminInvitationsPanel";
 import AdminOverviewPanel from "../components/admin/AdminOverviewPanel";
 import AdminProjectRibbon from "../components/admin/AdminProjectRibbon";
 import AdminSummaryKpis from "../components/admin/AdminSummaryKpis";
 import AdminTrackingPanel from "../components/admin/AdminTrackingPanel";
-import CompanyModal from "../components/admin/CompanyModal";
-import ProjectModal from "../components/admin/ProjectModal";
 import StatusBanner from "../components/StatusBanner";
+
+// Modals are only mounted when opened; defer their cost out of the initial
+// admin bundle (saves ~30 KB gzipped on first paint).
+const AdminDocumentReviewModal = lazy(
+  () => import("../components/admin/AdminDocumentReviewModal")
+);
+const CompanyModal = lazy(() => import("../components/admin/CompanyModal"));
+const ProjectModal = lazy(() => import("../components/admin/ProjectModal"));
 import { portalEnv } from "../config/env";
 import { createPowerAutomateClient } from "../lib/powerAutomateClient";
 import * as api from "../lib/adminApi";
@@ -30,15 +35,6 @@ function resolveDepositedRecordId(record) {
   const filePath = String(record?.filePath || "").trim();
   if (filePath.startsWith("local:")) return filePath.slice(6);
   return "";
-}
-
-function decodeBase64File(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
 }
 
 function AdminAppDashboard({ authSession, onLogout }) {
@@ -262,15 +258,14 @@ function AdminAppDashboard({ authSession, onLogout }) {
       const data = await api.downloadAdminDocument(recordId);
       if (requestId !== documentReviewRequestIdRef.current) return;
 
-      const mimeType = data.mimeType || "application/octet-stream";
-      const blob = new Blob([decodeBase64File(data.fileContent)], { type: mimeType });
+      // The blob already carries the right MIME type from the server stream.
       setDocumentReview((current) =>
         current
           ? {
               ...current,
               fileName: data.fileName || current.fileName,
               reviewStatus: data.reviewStatus || current.reviewStatus,
-              blobUrl: URL.createObjectURL(blob),
+              blobUrl: URL.createObjectURL(data.blob),
               loading: false,
               error: null,
             }
@@ -475,66 +470,74 @@ function AdminAppDashboard({ authSession, onLogout }) {
         </div>
       </main>
 
-      <ProjectModal
-        open={projectModalOpen}
-        projectForm={projectForm}
-        projects={projects}
-        selectedProjectId={selectedProjectId}
-        showArchived={showArchived}
-        onClose={handleCloseProjectModal}
-        onNewProject={handleNewProject}
-        onFieldChange={handleProjectFieldChange}
-        onSubmit={handleProjectSubmit}
-        onSelectProject={handleSelectProject}
-        onArchiveProject={handleArchiveProject}
-        onUnarchiveProject={handleUnarchiveProject}
-        onDeleteProject={handleDeleteProject}
-        onShowArchivedChange={setShowArchived}
-      />
+      <Suspense fallback={null}>
+        {projectModalOpen ? (
+          <ProjectModal
+            open={projectModalOpen}
+            projectForm={projectForm}
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            showArchived={showArchived}
+            onClose={handleCloseProjectModal}
+            onNewProject={handleNewProject}
+            onFieldChange={handleProjectFieldChange}
+            onSubmit={handleProjectSubmit}
+            onSelectProject={handleSelectProject}
+            onArchiveProject={handleArchiveProject}
+            onUnarchiveProject={handleUnarchiveProject}
+            onDeleteProject={handleDeleteProject}
+            onShowArchivedChange={setShowArchived}
+          />
+        ) : null}
 
-      <CompanyModal
-        open={companyModalOpen}
-        selectedProject={selectedProject}
-        companyForm={companyForm}
-        companySaveStatus={companySaveStatus}
-        companyDirectory={companyDirectory}
-        directorySearch={directorySearch}
-        directorySearchResults={directorySearchResults}
-        companyDocumentOptions={companyDocumentOptions}
-        companyDocumentGroups={companyDocumentGroups}
-        companyDocumentSearch={companyDocumentSearch}
-        customDocInput={customDocInput}
-        customDocSaving={customDocSaving}
-        onClose={handleCloseCompanyModal}
-        onReset={handleResetCompanyForm}
-        onSubmit={handleCompanySubmit}
-        onFieldChange={handleCompanyFieldChange}
-        onDirectorySearchChange={setDirectorySearch}
-        onSelectFromDirectory={handleSelectFromDirectory}
-        onDocumentSearchChange={setCompanyDocumentSearch}
-        onDocumentToggle={handleCompanyDocumentToggle}
-        onDocumentsBulk={handleCompanyDocumentsBulk}
-        onCustomDocInputChange={setCustomDocInput}
-        onAddCustomDocument={handleAddCustomDocument}
-      />
+        {companyModalOpen ? (
+          <CompanyModal
+            open={companyModalOpen}
+            selectedProject={selectedProject}
+            companyForm={companyForm}
+            companySaveStatus={companySaveStatus}
+            companyDirectory={companyDirectory}
+            directorySearch={directorySearch}
+            directorySearchResults={directorySearchResults}
+            companyDocumentOptions={companyDocumentOptions}
+            companyDocumentGroups={companyDocumentGroups}
+            companyDocumentSearch={companyDocumentSearch}
+            customDocInput={customDocInput}
+            customDocSaving={customDocSaving}
+            onClose={handleCloseCompanyModal}
+            onReset={handleResetCompanyForm}
+            onSubmit={handleCompanySubmit}
+            onFieldChange={handleCompanyFieldChange}
+            onDirectorySearchChange={setDirectorySearch}
+            onSelectFromDirectory={handleSelectFromDirectory}
+            onDocumentSearchChange={setCompanyDocumentSearch}
+            onDocumentToggle={handleCompanyDocumentToggle}
+            onDocumentsBulk={handleCompanyDocumentsBulk}
+            onCustomDocInputChange={setCustomDocInput}
+            onAddCustomDocument={handleAddCustomDocument}
+          />
+        ) : null}
 
-      <AdminDocumentReviewModal
-        open={Boolean(documentReview)}
-        companyName={documentReview?.companyName || ""}
-        documentLabel={documentReview?.documentLabel || ""}
-        fileName={documentReview?.fileName || ""}
-        reviewStatus={documentReview?.reviewStatus || "pending"}
-        reviewComment={documentReview?.reviewComment || ""}
-        reviewedAt={documentReview?.reviewedAt || ""}
-        reviewedBy={documentReview?.reviewedBy || ""}
-        blobUrl={documentReview?.blobUrl || null}
-        loading={Boolean(documentReview?.loading)}
-        error={documentReview?.error || ""}
-        saving={Boolean(documentReview?.saving)}
-        onClose={closeDocumentReview}
-        onAccept={() => submitDocumentReview("accepted")}
-        onReject={(comment) => submitDocumentReview("rejected", comment)}
-      />
+        {documentReview ? (
+          <AdminDocumentReviewModal
+            open={Boolean(documentReview)}
+            companyName={documentReview?.companyName || ""}
+            documentLabel={documentReview?.documentLabel || ""}
+            fileName={documentReview?.fileName || ""}
+            reviewStatus={documentReview?.reviewStatus || "pending"}
+            reviewComment={documentReview?.reviewComment || ""}
+            reviewedAt={documentReview?.reviewedAt || ""}
+            reviewedBy={documentReview?.reviewedBy || ""}
+            blobUrl={documentReview?.blobUrl || null}
+            loading={Boolean(documentReview?.loading)}
+            error={documentReview?.error || ""}
+            saving={Boolean(documentReview?.saving)}
+            onClose={closeDocumentReview}
+            onAccept={() => submitDocumentReview("accepted")}
+            onReject={(comment) => submitDocumentReview("rejected", comment)}
+          />
+        ) : null}
+      </Suspense>
     </div>
   );
 }

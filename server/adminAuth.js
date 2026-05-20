@@ -1,38 +1,10 @@
 import crypto from "node:crypto";
 
+import { cleanString, parseStrictPositiveInt as parsePositiveInt } from "./lib/coercions.js";
+import { fromBase64Url, timingSafeEqual, toBase64Url } from "./lib/encoding.js";
+
 const SESSION_COOKIE = "portal_admin_session";
 const DEFAULT_SESSION_TTL_HOURS = 12;
-
-function cleanString(value) {
-  return String(value || "").trim();
-}
-
-function parsePositiveInt(value, fallback = 0) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
-
-function toBase64Url(buffer) {
-  return Buffer.from(buffer)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function fromBase64Url(value) {
-  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
-  const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
-  return Buffer.from(`${normalized}${padding}`, "base64");
-}
-
-function timingSafeEqual(left, right) {
-  const a = Buffer.from(String(left || ""), "utf8");
-  const b = Buffer.from(String(right || ""), "utf8");
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
 
 function resolveSessionSecret(env = process.env) {
   return cleanString(env.PORTAL_ADMIN_SESSION_SECRET) || cleanString(env.PORTAL_LINK_SECRET);

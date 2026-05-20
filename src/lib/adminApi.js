@@ -171,10 +171,44 @@ export function runMaintenanceCleanup() {
   return request("/maintenance/cleanup", { method: "POST" });
 }
 
-export function downloadAdminDocument(recordId) {
-  return request(`/documents/${encodeURIComponent(recordId)}/download`, {
-    method: "POST",
-  });
+// Downloads stream the raw file body now; we surface metadata via response
+// headers so the caller doesn't have to round-trip through JSON+base64.
+export async function downloadAdminDocument(recordId) {
+  const url = `${API_BASE}/documents/${encodeURIComponent(recordId)}/download`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
+    if (isFetchNetworkFailure(err)) {
+      throw new Error(
+        "Impossible de joindre le serveur (pas de reponse HTTP). En local, utilisez `npm run dev`."
+      );
+    }
+    throw err;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const encodedName = res.headers.get("X-File-Name") || "";
+  let fileName = "document";
+  try {
+    fileName = decodeURIComponent(encodedName) || fileName;
+  } catch {
+    fileName = encodedName || fileName;
+  }
+  return {
+    success: true,
+    blob,
+    fileName,
+    mimeType: res.headers.get("Content-Type") || blob.type || "application/octet-stream",
+    reviewStatus: res.headers.get("X-Review-Status") || "pending",
+  };
 }
 
 export function reviewAdminDocument(recordId, { reviewStatus, reviewComment = "" } = {}) {

@@ -39,8 +39,9 @@ export async function startServer() {
   const port = env.PORT || 3001;
   const role = getAppRole(env);
 
-  await initDatabase(env);
-
+  // Run diagnostics BEFORE initDatabase so a misconfigured prod start fails
+  // fast without opening a Postgres connection. Static-bundle checks tolerate
+  // a missing build, since the role/diagnostics tests run independently.
   const staticBundle = getStaticBundle(rootDir, role);
   const startupDiagnostics = getStartupDiagnostics(staticBundle, { env, role });
 
@@ -54,9 +55,14 @@ export async function startServer() {
     }
 
     if (env.NODE_ENV === "production") {
+      console.error(
+        "[startup] Refusing to start in production with the errors above. Fix the configuration and retry."
+      );
       process.exit(1);
     }
   }
+
+  await initDatabase(env);
 
   const maxFileMb = Math.max(parsePositiveInt(env.PORTAL_MAX_FILE_MB, 20), 1);
   const { app, isProduction, bodyLimitMb, portalRateLimitPerMinute, portalUploadRateLimitPerMinute } =

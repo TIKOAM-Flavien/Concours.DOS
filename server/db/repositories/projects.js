@@ -8,28 +8,30 @@ import {
 
 export async function getAllProjects({ includeArchived = false } = {}) {
   const pool = getPool();
-  const projectsResult = await pool.query(
-    includeArchived
-      ? `SELECT * FROM projects ORDER BY ("archivedAt" = '') DESC, "createdAt" DESC`
-      : `SELECT * FROM projects WHERE "archivedAt" = '' ORDER BY "createdAt" DESC`
+  // Single JOIN + jsonb_agg replaces the previous 2-query fetch-then-stitch.
+  // FILTER (WHERE c.id IS NOT NULL) keeps projects without companies as an
+  // empty array (LEFT JOIN would otherwise produce [null]).
+  const result = await pool.query(
+    `SELECT p.*,
+            COALESCE(
+              jsonb_agg(to_jsonb(c) ORDER BY c."companyName")
+                FILTER (WHERE c.id IS NOT NULL),
+              '[]'::jsonb
+            ) AS companies_json
+     FROM projects p
+     LEFT JOIN companies c ON c."projectId" = p.id
+     ${includeArchived ? "" : `WHERE p."archivedAt" = ''`}
+     GROUP BY p.id
+     ORDER BY ${includeArchived ? `(p."archivedAt" = '') DESC,` : ""} p."createdAt" DESC`
   );
-  const companiesResult = await pool.query("SELECT * FROM companies ORDER BY \"companyName\"");
-  const projectIds = new Set(projectsResult.rows.map((p) => p.id));
-  const companiesByProject = new Map();
 
-  for (const company of companiesResult.rows) {
-    if (!projectIds.has(company.projectId)) continue;
-    const serialized = serializeCompany(company);
-    if (!companiesByProject.has(company.projectId)) {
-      companiesByProject.set(company.projectId, []);
-    }
-    companiesByProject.get(company.projectId).push(serialized);
-  }
-
-  return projectsResult.rows.map((p) => ({
-    ...serializeProject(p),
-    companies: companiesByProject.get(p.id) || [],
-  }));
+  return result.rows.map((row) => {
+    const { companies_json, ...projectRow } = row;
+    return {
+      ...serializeProject(projectRow),
+      companies: (companies_json || []).map(serializeCompany),
+    };
+  });
 }
 
 export async function getProject(id) {

@@ -40,21 +40,6 @@ function assertSuccessPayload(label, data) {
   }
 }
 
-function base64ToBytes(base64, label) {
-  const clean = String(base64).replace(/^data:.*?;base64,/, "").replace(/\s/g, "");
-  let bin;
-  try {
-    bin = atob(clean);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`${label}: reponse illisible (base64 invalide). ${message}`);
-  }
-
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
 async function requestJson(label, path, payload, options = {}) {
   let response;
   try {
@@ -166,50 +151,42 @@ export function createPowerAutomateClient() {
     },
 
     async downloadDocument({ context, record }, options) {
-      const data = await requestJson(
-        "DOWNLOAD_FILE",
-        "/api/portal/download",
-        {
-          ...buildSignedLinkPayload(context),
-          filePath: record.filePath,
-          fileIdentifier: record.fileIdentifier || "",
-        },
-        options
-      );
-
-      if (data && typeof data === "object" && data.fileContent) {
-        const name = data.fileName || record.fileName;
-        const ext = String(name || "").split(".").pop().toLowerCase();
-        const mimeMap = {
-          pdf: "application/pdf",
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          gif: "image/gif",
-          webp: "image/webp",
-          doc: "application/msword",
-          docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          xls: "application/vnd.ms-excel",
-          xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        };
-        const mime = mimeMap[ext] || "application/octet-stream";
-        const bytes = base64ToBytes(data.fileContent, "DOWNLOAD_FILE");
-        const blob = new Blob([bytes], { type: mime });
-        return { blobUrl: URL.createObjectURL(blob), fileName: name };
+      let response;
+      try {
+        response = await fetch("/api/portal/download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...buildSignedLinkPayload(context),
+            filePath: record.filePath,
+            fileIdentifier: record.fileIdentifier || "",
+          }),
+          ...options,
+        });
+      } catch (err) {
+        rethrowFetchNetworkFailure("DOWNLOAD_FILE", err);
       }
 
-      if (typeof data === "string" && data.length > 0) {
-        const ext = String(record.fileName || "").split(".").pop().toLowerCase();
-        const mime =
-          { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg" }[
-            ext
-          ] || "application/octet-stream";
-        const bytes = base64ToBytes(data, "DOWNLOAD_FILE");
-        const blob = new Blob([bytes], { type: mime });
-        return { blobUrl: URL.createObjectURL(blob), fileName: record.fileName };
+      if (!response.ok) {
+        let message = `${response.status} ${response.statusText}`;
+        try {
+          const data = unwrapBody(await response.clone().json());
+          message = (data && (data.error || data.message)) || message;
+        } catch {
+          // body wasn't JSON — leave the status-derived message
+        }
+        throw new Error(`DOWNLOAD_FILE: ${message}`);
       }
 
-      throw new Error("DOWNLOAD_FILE: reponse sans contenu exploitable.");
+      const blob = await response.blob();
+      const encodedName = response.headers.get("X-File-Name") || "";
+      let fileName = record.fileName || "document";
+      try {
+        fileName = decodeURIComponent(encodedName) || fileName;
+      } catch {
+        fileName = encodedName || fileName;
+      }
+      return { blobUrl: URL.createObjectURL(blob), fileName };
     },
 
     async listDocuments(context, options) {

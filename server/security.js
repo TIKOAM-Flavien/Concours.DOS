@@ -1,22 +1,10 @@
 import crypto from "node:crypto";
 import { normalizeFolderPath as sharedNormalizeFolderPath } from "../shared/folderPath.js";
 import { normalizeDocumentId } from "../src/config/documentCatalog.js";
+import { cleanString, parsePositiveInt as parsePositiveIntShared } from "./lib/coercions.js";
+import { toBase64Url, fromBase64Url, timingSafeEqual } from "./lib/encoding.js";
 
 const DEFAULT_INVITATION_TTL_MINUTES = 43200; // 30 days
-
-function toBase64Url(buffer) {
-  return Buffer.from(buffer)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function fromBase64Url(value) {
-  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
-  const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
-  return Buffer.from(`${normalized}${padding}`, "base64");
-}
 
 function sortKeysDeep(value) {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
@@ -33,17 +21,6 @@ function sortKeysDeep(value) {
 
 function hmacSha256Base64Url(message, secret) {
   return crypto.createHmac("sha256", secret).update(message).digest("base64url");
-}
-
-function timingSafeEqual(left, right) {
-  const a = Buffer.from(String(left || ""), "utf8");
-  const b = Buffer.from(String(right || ""), "utf8");
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-function cleanString(value) {
-  return String(value || "").trim();
 }
 
 // Re-export the shared implementation so there is exactly one canonical
@@ -88,11 +65,9 @@ function normalizeDocumentList(documents) {
   return out;
 }
 
-export function parsePositiveInt(value, fallback = 0) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (Number.isNaN(parsed) || parsed < 0) return fallback;
-  return parsed;
-}
+// Re-exported for legacy callers that still import parsePositiveInt from
+// server/security.js. The canonical implementation lives in lib/coercions.js.
+export const parsePositiveInt = parsePositiveIntShared;
 
 export function encodeBase64Url(value) {
   return toBase64Url(Buffer.from(String(value || ""), "utf8"));

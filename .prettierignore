@@ -1,0 +1,7 @@
+node_modules/
+dist-all/
+dist-admin/
+dist-portal/
+server/uploads/
+debug/
+package-lock.json

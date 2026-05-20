@@ -1,14 +1,6 @@
-﻿function cleanString(value) {
-  return String(value || "").trim();
-}
+﻿import { cleanString, parseStrictPositiveInt as parsePositiveInt } from "./lib/coercions.js";
 
 const DEFAULT_FLOW_TIMEOUT_MS = 120000;
-
-function parsePositiveInt(value, fallback = 0) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (Number.isNaN(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
 
 function getFlowTimeoutMs(env = process.env) {
   return parsePositiveInt(env.PORTAL_FLOW_TIMEOUT_MS, DEFAULT_FLOW_TIMEOUT_MS);

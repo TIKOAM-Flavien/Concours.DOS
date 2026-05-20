@@ -59,8 +59,20 @@ export function createRequestHelpers({ env, isProduction, port }) {
   function wrap(fn) {
     return (req, res, next) => {
       Promise.resolve(fn(req, res, next)).catch((err) => {
-        console.error(err);
-        res.status(err.statusCode || 500).json({ error: err.message });
+        const status = err.statusCode || 500;
+        // pino-http attaches req.log per-request; fall back to console for
+        // contexts where the middleware did not run (tests, healthchecks).
+        const logger = req?.log || console;
+        if (status >= 500) {
+          logger.error({ err, status }, "request failed");
+        } else {
+          logger.warn({ err, status }, "request rejected");
+        }
+        const message =
+          status >= 500 && isProduction
+            ? "Internal server error"
+            : err.message;
+        res.status(status).json({ error: message });
       });
     };
   }
@@ -96,7 +108,12 @@ export function createRequestHelpers({ env, isProduction, port }) {
   function hashActorIp(rawIp) {
     const ip = normalizeIp(rawIp);
     if (!ip) return "";
-    const salt = String(env.PORTAL_LINK_SECRET || env.PORTAL_ADMIN_PASSWORD || "");
+    // Prefer a dedicated pepper so rotating the invitation-signing secret
+    // does not invalidate (or correlate to) historical IP hashes. Falls back
+    // to PORTAL_LINK_SECRET for backwards compatibility with existing logs.
+    const salt = String(
+      env.PORTAL_IP_HASH_PEPPER || env.PORTAL_LINK_SECRET || env.PORTAL_ADMIN_PASSWORD || ""
+    );
     return createHash("sha256").update(`${salt}:${ip}`).digest("hex");
   }
 

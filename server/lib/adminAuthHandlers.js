@@ -17,6 +17,16 @@ export function createAdminAuthHandlers({
   audit,
   normalizeTextField,
 }) {
+  // In production we always set Secure on the session cookie, even when the
+  // request looks like plain HTTP. A misconfigured reverse-proxy (missing
+  // TRUST_PROXY) would otherwise issue cookies usable over HTTP. The cookie
+  // will simply be dropped by the browser if the real connection is HTTP,
+  // which is the safe failure mode.
+  function isSecureCookieRequired(req) {
+    if (env.NODE_ENV === "production") return true;
+    return Boolean(req.secure || req.get("x-forwarded-proto") === "https");
+  }
+
   function isLoopbackActorIp(ip) {
     return ip === "127.0.0.1" || ip === "::1";
   }
@@ -104,7 +114,7 @@ export function createAdminAuthHandlers({
     }
 
     const token = createAdminSessionToken(config);
-    const secureCookie = Boolean(req.secure || req.get("x-forwarded-proto") === "https");
+    const secureCookie = isSecureCookieRequired(req);
     res.setHeader("Set-Cookie", buildAdminSessionCookie(token, config, { secure: secureCookie }));
     audit(req, "admin.login", { username: config.username }).catch(() => {});
     return res.json({
@@ -116,7 +126,7 @@ export function createAdminAuthHandlers({
 
   function logoutAdmin(req, res) {
     const config = getAdminAuthConfig(env);
-    const secureCookie = Boolean(req.secure || req.get("x-forwarded-proto") === "https");
+    const secureCookie = isSecureCookieRequired(req);
     res.setHeader("Set-Cookie", buildAdminSessionClearCookie(config, { secure: secureCookie }));
     audit(req, "admin.logout", {}).catch(() => {});
     return res.json({ ok: true });

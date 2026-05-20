@@ -14,15 +14,15 @@ services:
     container_name: portail-postgres-prod
     restart: unless-stopped
     environment:
-      POSTGRES_USER: portail
-      POSTGRES_PASSWORD: portail
-      POSTGRES_DB: portail
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env.production}
     ports:
       - "5432:5432"
     volumes:
       - portail_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U portail -d portail"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -44,7 +44,7 @@ services:
       NODE_ENV: production
       PORT: "3002"
       PORTAL_APP_ROLE: admin
-      DATABASE_URL: postgresql://portail:portail@postgres:5432/portail
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TRUST_PROXY: "1"
       PORTAL_ADMIN_ALLOWED_IPS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
       CLIENT_PORTAL_PUBLIC_URL: "http://localhost:3002/depot"
@@ -75,7 +75,7 @@ services:
       NODE_ENV: production
       PORT: "3002"
       PORTAL_APP_ROLE: portal
-      DATABASE_URL: postgresql://portail:portail@postgres:5432/portail
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TRUST_PROXY: "1"
       PORTAL_UPLOAD_STAGING_DIR: /data/uploads
     env_file:

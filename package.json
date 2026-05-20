@@ -14,22 +14,40 @@
     "build:portal": "vite build --mode portal",
     "build:admin": "vite build --mode admin",
     "check": "npm run build:all",
-    "test": "node --test server/security.invitation.test.js server/adminAuth.test.js server/adminUtils.test.js server/adminCompanyDocuments.test.js server/adminOverviewLogic.test.js server/adminTrackingLogic.test.js",
+    "test": "node --test server/security.invitation.test.js server/adminAuth.test.js server/adminUtils.test.js server/adminCompanyDocuments.test.js server/adminOverviewLogic.test.js server/adminTrackingLogic.test.js server/routes/http.test.js",
     "smoke:e2e": "node scripts/smoke-e2e.mjs",
     "audit:prod": "npm audit --omit=dev",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "start": "node server/index.js"
   },
   "dependencies": {
     "busboy": "^1.6.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.1",
+    "file-type": "^22.0.1",
     "pg": "^8.16.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.60.0",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "supertest": "^7.2.2",
     "vite": "^8.0.8"
   }
 }

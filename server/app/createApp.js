@@ -1,6 +1,7 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 
+import { createHttpLogger, createLogger } from "../lib/logger.js";
 import { parsePositiveInt } from "../security.js";
 
 export function createApp({ env = process.env } = {}) {
@@ -28,6 +29,10 @@ export function createApp({ env = process.env } = {}) {
     app.set("trust proxy", value);
   }
 
+  const logger = createLogger({ env });
+  app.locals.logger = logger;
+  app.use(createHttpLogger(logger));
+
   app.use(express.json({ limit: `${bodyLimitMb}mb` }));
 
   return {
@@ -36,6 +41,7 @@ export function createApp({ env = process.env } = {}) {
     bodyLimitMb,
     portalRateLimitPerMinute,
     portalUploadRateLimitPerMinute,
+    logger,
   };
 }
 

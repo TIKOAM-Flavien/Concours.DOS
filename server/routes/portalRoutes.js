@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 
 import {
   listDocumentRecordsForInvitation,
@@ -18,8 +19,6 @@ export function registerPortalRoutes(app, ctx) {
     commitSubmissionDailyBudget,
     resolveInvitationDocument,
     resolveLocalRecordReference,
-    purgeExpiredLocalDocumentFiles,
-    audit,
     env,
   } = ctx;
 
@@ -124,27 +123,31 @@ export function registerPortalRoutes(app, ctx) {
         throw new Error("Local file is no longer retained.");
       }
 
-      const buffer = await readFile(record.storagePath);
+      const stats = await stat(record.storagePath).catch(() => null);
+      if (!stats) {
+        return res.status(410).json({ error: "Fichier local plus disponible sur le serveur." });
+      }
+
       await commitSubmissionDailyBudget(invitation, { cost: 1 });
 
-      res.json({
-        success: true,
-        localOnly: true,
-        fileContent: buffer.toString("base64"),
-        filePath: `local:${record.id}`,
-        fileName: record.fileName,
+      const fileName = record.fileName || record.originalFileName || "document";
+      res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
+      res.setHeader("Content-Length", String(stats.size));
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
+      );
+      res.setHeader("X-File-Name", encodeURIComponent(fileName));
+      res.setHeader("X-Local-Path", `local:${record.id}`);
+
+      const stream = createReadStream(record.storagePath);
+      stream.on("error", (error) => {
+        console.error("[portal.download] stream error", error);
+        if (!res.headersSent) res.status(500).end();
+        else res.destroy(error);
       });
+      stream.pipe(res);
     })
   );
 
-  app.post(
-    "/api/portal/maintenance/cleanup",
-    wrap(async (req, res) => {
-      const purgedUploads = await purgeExpiredLocalDocumentFiles();
-      await audit(req, "portal.maintenance.cleanup", {
-        purgedUploads: purgedUploads.removed,
-      });
-      res.json({ ok: true, purgedUploads });
-    })
-  );
 }
