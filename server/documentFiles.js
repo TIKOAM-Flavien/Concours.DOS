@@ -38,10 +38,10 @@ export function getUploadStorageConfig(env = process.env) {
   return {
     stagingDir,
     retentionDays: parsePositiveInt(env.PORTAL_UPLOAD_RETENTION_DAYS, 14),
-    workerEnabled:
-      cleanString(env.PORTAL_UPLOAD_WORKER_ENABLED).toLowerCase() !== "false",
-    workerIntervalMs: parsePositiveInt(env.PORTAL_UPLOAD_WORKER_INTERVAL_MS, 5000),
-    workerMaxAttempts: parsePositiveInt(env.PORTAL_UPLOAD_WORKER_MAX_ATTEMPTS, 5),
+    jobMaxAttempts: parsePositiveInt(
+      env.PORTAL_UPLOAD_JOB_MAX_ATTEMPTS || env.PORTAL_UPLOAD_WORKER_MAX_ATTEMPTS,
+      5
+    ),
   };
 }
 

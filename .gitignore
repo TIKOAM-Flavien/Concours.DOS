@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-all/
+dist-portal/
+dist-admin/
 .env
 .env.*
 !.env.example

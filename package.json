@@ -1,5 +1,5 @@
 {
-  "name": "depot-pieces-concours-archi",
+  "name": "concours-dos",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -8,16 +8,22 @@
     "dev:server": "node server/index.js",
     "dev:vite": "vite",
     "prebuild:all": "node scripts/check-public-env.mjs",
-    "build:all": "vite build --mode all --outDir dist-all",
+    "prebuild:portal": "node scripts/check-public-env.mjs",
+    "prebuild:admin": "node scripts/check-public-env.mjs",
+    "build:all": "vite build --mode all",
+    "build:portal": "vite build --mode portal",
+    "build:admin": "vite build --mode admin",
     "check": "npm run build:all",
+    "test": "node --test server/security.invitation.test.js server/adminAuth.test.js server/adminUtils.test.js server/adminCompanyDocuments.test.js server/adminOverviewLogic.test.js server/adminTrackingLogic.test.js",
+    "smoke:e2e": "node scripts/smoke-e2e.mjs",
     "audit:prod": "npm audit --omit=dev",
     "start": "node server/index.js"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
     "busboy": "^1.6.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.1",
+    "pg": "^8.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

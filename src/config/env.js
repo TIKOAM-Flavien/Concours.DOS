@@ -1,4 +1,4 @@
-import { normalizeSharePointFolderPath } from "../../shared/sharepointPath.js";
+import { normalizeFolderPath } from "../../shared/folderPath.js";
 
 function splitCsv(value) {
   return String(value || "")
@@ -28,11 +28,8 @@ export const portalEnv = Object.freeze({
   websiteUrl: (env.VITE_CLIENT_PORTAL_WEBSITE_URL || "https://www.tikoam.com").trim(),
   maxFileMb: positiveNumber(env.VITE_CLIENT_PORTAL_MAX_FILE_MB, 20),
   defaultContestName: (env.VITE_CLIENT_PORTAL_CONTEST_NAME || "").trim(),
-  defaultFolderPath: normalizeSharePointFolderPath(
-    env.VITE_CLIENT_PORTAL_DEFAULT_FOLDER_PATH ||
-      env.VITE_SHAREPOINT_FOLDER_PATH ||
-      env.VITE_SHAREPOINT_FOLDER ||
-      ""
+  defaultFolderPath: normalizeFolderPath(
+    env.VITE_CLIENT_PORTAL_DEFAULT_FOLDER_PATH || ""
   ),
   defaultDossierId: (
     env.VITE_CLIENT_PORTAL_DEFAULT_DOSSIER_ID ||

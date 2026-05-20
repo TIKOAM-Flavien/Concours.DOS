@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { normalizeSharePointFolderPath as sharedNormalizeSharePointFolderPath } from "../shared/sharepointPath.js";
+import { normalizeFolderPath as sharedNormalizeFolderPath } from "../shared/folderPath.js";
 import { normalizeDocumentId } from "../src/config/documentCatalog.js";
 
 const DEFAULT_INVITATION_TTL_MINUTES = 43200; // 30 days
@@ -46,10 +46,10 @@ function cleanString(value) {
   return String(value || "").trim();
 }
 
-// B-05: re-export the shared implementation so there is exactly one
-// canonical normalizer across the codebase. The frontend imports the same
-// module directly from `shared/sharepointPath.js`.
-export const normalizeSharePointFolderPath = sharedNormalizeSharePointFolderPath;
+// Re-export the shared implementation so there is exactly one canonical
+// normalizer across the codebase. The frontend imports the same module
+// directly from `shared/folderPath.js`.
+export const normalizeFolderPath = sharedNormalizeFolderPath;
 
 function normalizeDocumentEntry(entry) {
   if (entry && typeof entry === "object") {
@@ -109,6 +109,7 @@ export function canonicalJson(value) {
 export function sanitizeInvitationContext(rawContext = {}) {
   return {
     projectId: cleanString(rawContext.projectId),
+    companyDbId: cleanString(rawContext.companyDbId || rawContext.companyDatabaseId),
     companyId: cleanString(rawContext.companyId),
     companyName: cleanString(rawContext.companyName),
     companyEmail: cleanString(rawContext.companyEmail),
@@ -116,7 +117,7 @@ export function sanitizeInvitationContext(rawContext = {}) {
     submissionId: cleanString(rawContext.submissionId),
     contestName: cleanString(rawContext.contestName),
     dossierId: cleanString(rawContext.dossierId),
-    folderPath: normalizeSharePointFolderPath(rawContext.folderPath),
+    folderPath: normalizeFolderPath(rawContext.folderPath),
     supportEmail: cleanString(rawContext.supportEmail),
     supportPhone: cleanString(rawContext.supportPhone),
     websiteUrl: cleanString(rawContext.websiteUrl),
@@ -191,9 +192,14 @@ export function isInvitationDeadlinePast(payload = {}, now = new Date()) {
   return reference.getTime() > deadlineDate.getTime();
 }
 
-export function buildSignedContext({ context, secret, ttlMinutes = 0, now = new Date() }) {
-  if (!secret) throw new Error("Missing signature secret.");
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function isOpaqueInvitationId(value) {
+  return UUID_V4_PATTERN.test(String(value || "").trim());
+}
+
+function buildInvitationPayload({ context, ttlMinutes = 0, now = new Date() }) {
   const payload = {
     ...sanitizeInvitationContext(context),
     nonce: crypto.randomBytes(18).toString("base64url"),
@@ -204,84 +210,183 @@ export function buildSignedContext({ context, secret, ttlMinutes = 0, now = new 
     payload.exp = new Date(now.getTime() + ttlMinutes * 60 * 1000).toISOString();
   }
 
-  const ctx = encodeBase64Url(canonicalJson(payload));
-  const sig = hmacSha256Base64Url(ctx, secret);
-
-  return { ctx, sig, payload };
+  return payload;
 }
 
-export function buildSignedInvitationUrl({
-  context,
-  secret,
-  baseUrl,
-  ttlMinutes = 0,
-  now = new Date(),
-}) {
-  const { ctx, sig, payload } = buildSignedContext({
-    context,
-    secret,
-    ttlMinutes,
-    now,
-  });
-
+function buildSignedInvitationResult({ id, payload, secret, baseUrl }) {
+  const sig = hmacSha256Base64Url(id, secret);
   const url = new URL(baseUrl);
-  url.searchParams.set("ctx", ctx);
+  url.searchParams.set("inv", id);
   url.searchParams.set("sig", sig);
   url.searchParams.set("alg", "HS256");
 
   return {
     url: url.toString(),
-    ctx,
+    inv: id,
     sig,
     payload,
+    invitationId: id,
   };
 }
 
-function parsePayload(ctx) {
-  try {
-    const decoded = decodeBase64Url(ctx);
-    return JSON.parse(decoded);
-  } catch {
-    return null;
-  }
+function mergeReusableInvitationPayload(existingInvitation, nextPayload) {
+  const existingPayload =
+    existingInvitation?.payload && typeof existingInvitation.payload === "object"
+      ? existingInvitation.payload
+      : {};
+  const exp = existingPayload.exp || existingInvitation?.exp || nextPayload.exp || "";
+
+  return {
+    ...nextPayload,
+    nonce:
+      existingPayload.nonce ||
+      nextPayload.nonce ||
+      crypto.randomBytes(18).toString("base64url"),
+    iat: existingPayload.iat || existingInvitation?.iat || nextPayload.iat,
+    ...(exp ? { exp } : {}),
+  };
 }
 
-export function verifySignedContext({
-  ctx,
+export async function persistAndSignInvitation({
+  context,
+  secret,
+  ttlMinutes = 0,
+  baseUrl,
+  now = new Date(),
+  insertSignedInvitation,
+  findReusableSignedInvitation,
+  updateSignedInvitationPayload,
+}) {
+  if (!secret) throw new Error("Missing signature secret.");
+  if (typeof insertSignedInvitation !== "function") {
+    throw new Error("insertSignedInvitation is required.");
+  }
+
+  const payload = buildInvitationPayload({ context, ttlMinutes, now });
+
+  if (
+    typeof findReusableSignedInvitation === "function" &&
+    typeof updateSignedInvitationPayload === "function" &&
+    payload.projectId &&
+    (payload.companyDbId || payload.companyId)
+  ) {
+    const reusable = await findReusableSignedInvitation({
+      projectId: payload.projectId,
+      companyDbId: payload.companyDbId,
+      companyId: payload.companyId,
+      now,
+    });
+
+    if (reusable?.id) {
+      const reusablePayload = mergeReusableInvitationPayload(reusable, payload);
+      await updateSignedInvitationPayload({
+        id: reusable.id,
+        payload: reusablePayload,
+        projectId: reusablePayload.projectId,
+        companyId: reusablePayload.companyId,
+        submissionId: reusablePayload.submissionId,
+        now,
+      });
+
+      return {
+        ...buildSignedInvitationResult({
+          id: reusable.id,
+          payload: reusablePayload,
+          secret,
+          baseUrl,
+        }),
+        reused: true,
+      };
+    }
+  }
+
+  const id = crypto.randomUUID();
+
+  await insertSignedInvitation({
+    id,
+    payload,
+    projectId: payload.projectId,
+    companyId: payload.companyId,
+    submissionId: payload.submissionId,
+    iat: payload.iat,
+    exp: payload.exp || null,
+  });
+
+  return {
+    ...buildSignedInvitationResult({ id, payload, secret, baseUrl }),
+    reused: false,
+  };
+}
+
+export async function buildSignedInvitationUrl({
+  context,
+  secret,
+  baseUrl,
+  ttlMinutes = 0,
+  now = new Date(),
+  insertSignedInvitation,
+  findReusableSignedInvitation,
+  updateSignedInvitationPayload,
+}) {
+  return persistAndSignInvitation({
+    context,
+    secret,
+    ttlMinutes,
+    baseUrl,
+    now,
+    insertSignedInvitation,
+    findReusableSignedInvitation,
+    updateSignedInvitationPayload,
+  });
+}
+
+export async function verifySignedInvitation({
+  inv,
   sig,
   alg = "HS256",
   secret,
   now = new Date(),
+  loadInvitation,
+  allowExpired = false,
 }) {
-  if (!ctx) return { ok: false, code: "missing_ctx" };
+  if (!inv) return { ok: false, code: "missing_inv" };
   if (!sig) return { ok: false, code: "missing_sig" };
   if (!secret) return { ok: false, code: "missing_secret" };
+
   const normalizedAlg = String(alg || "").trim().toUpperCase();
   if (normalizedAlg && normalizedAlg !== "HS256") {
     return { ok: false, code: "invalid_alg" };
   }
 
-  const expected = hmacSha256Base64Url(String(ctx), secret);
-  if (!timingSafeEqual(expected, sig)) return { ok: false, code: "invalid_sig" };
-
-  const payload = parsePayload(ctx);
-  if (!payload || typeof payload !== "object") {
-    return { ok: false, code: "invalid_ctx" };
+  const invitationId = String(inv).trim();
+  if (!isOpaqueInvitationId(invitationId)) {
+    return { ok: false, code: "invalid_inv" };
   }
 
-  if (payload.exp) {
-    const expDate = new Date(payload.exp);
+  const expected = hmacSha256Base64Url(invitationId, secret);
+  if (!timingSafeEqual(expected, sig)) return { ok: false, code: "invalid_sig" };
+
+  if (typeof loadInvitation !== "function") {
+    throw new Error("loadInvitation is required.");
+  }
+
+  const record = await loadInvitation(invitationId);
+  if (!record) return { ok: false, code: "invalid_inv" };
+
+  const payload =
+    record.payload && typeof record.payload === "object" ? record.payload : null;
+  if (!payload) return { ok: false, code: "invalid_inv" };
+
+  const expRaw = record.exp || payload.exp || null;
+  if (expRaw) {
+    const expDate = new Date(expRaw);
     if (Number.isNaN(expDate.getTime())) {
       return { ok: false, code: "invalid_exp" };
     }
-    if (now.getTime() > expDate.getTime()) {
-      return { ok: false, code: "expired", payload };
+    if (!allowExpired && now.getTime() > expDate.getTime()) {
+      return { ok: false, code: "expired", payload, invitationId };
     }
   }
 
-  return { ok: true, code: "ok", payload };
-}
-
-export function hashSignedContextId(ctx) {
-  return crypto.createHash("sha256").update(String(ctx || ""), "utf8").digest("hex");
+  return { ok: true, code: "ok", payload, invitationId };
 }

@@ -14,13 +14,6 @@ function getFlowTimeoutMs(env = process.env) {
   return parsePositiveInt(env.PORTAL_FLOW_TIMEOUT_MS, DEFAULT_FLOW_TIMEOUT_MS);
 }
 
-function fileNameFromPath(filePath) {
-  return String(filePath || "")
-    .split("/")
-    .filter(Boolean)
-    .pop() || "";
-}
-
 function unwrapBody(value) {
   if (value && typeof value === "object" && value.body !== undefined) {
     return value.body;
@@ -41,19 +34,11 @@ function assertFlowSuccess(label, data) {
   }
 }
 
+/** Power Automate: emailing only (invitations + relances). Documents stay on local VPS storage. */
 export function getFlowConfig(env = process.env) {
   return {
-    getDocumentsUrl: cleanString(env.POWER_AUTOMATE_GET_DOCUMENTS_URL),
-    downloadUrl: cleanString(env.POWER_AUTOMATE_DOWNLOAD_FILE_URL),
-    uploadUrl: cleanString(env.POWER_AUTOMATE_UPLOAD_FILE_URL),
-    updateUrl: cleanString(env.POWER_AUTOMATE_UPDATE_FILE_URL),
-    deleteUrl: cleanString(env.POWER_AUTOMATE_DELETE_FILE_URL),
-    sendInvitationsUrl: cleanString(
-      env.POWER_AUTOMATE_SEND_INVITATIONS_URL
-    ),
-    sendRemindersUrl: cleanString(
-      env.POWER_AUTOMATE_SEND_REMINDERS_URL
-    ),
+    sendInvitationsUrl: cleanString(env.POWER_AUTOMATE_SEND_INVITATIONS_URL),
+    sendRemindersUrl: cleanString(env.POWER_AUTOMATE_SEND_REMINDERS_URL),
   };
 }
 
@@ -62,11 +47,7 @@ export function getFlowStatus(env = process.env) {
 
   return {
     documentsEnabled: true,
-    getDocumentsFlowEnabled: Boolean(config.getDocumentsUrl),
-    downloadEnabled: Boolean(config.downloadUrl),
-    uploadEnabled: Boolean(config.uploadUrl),
-    updateEnabled: Boolean(config.updateUrl),
-    deleteEnabled: Boolean(config.deleteUrl),
+    localStorageOnly: true,
     sendInvitationsEnabled: Boolean(config.sendInvitationsUrl),
     sendRemindersEnabled: Boolean(config.sendRemindersUrl),
   };
@@ -119,66 +100,4 @@ export async function callFlow(label, url, payload) {
   assertFlowSuccess(label, data);
 
   return data;
-}
-
-export async function callDownloadFlow(url, payload = {}) {
-  if (!url) {
-    throw new Error("DOWNLOAD_FILE: URL de flow manquante.");
-  }
-
-  const response = await postJsonWithTimeout("DOWNLOAD_FILE", url, payload);
-
-  const contentType = (response.headers.get("content-type") || "").toLowerCase();
-
-  if (!response.ok) {
-    const rawText = await response.text();
-    let parsed = rawText;
-    try {
-      parsed = rawText ? JSON.parse(rawText) : null;
-    } catch {
-      parsed = rawText || null;
-    }
-    const data = unwrapBody(parsed);
-    const message =
-      (data && typeof data === "object" && data.message) ||
-      rawText ||
-      `${response.status} ${response.statusText}`;
-    throw new Error(`DOWNLOAD_FILE: ${message}`);
-  }
-
-  if (contentType.includes("application/json") || contentType.startsWith("text/")) {
-    const rawText = await response.text();
-    let parsed = rawText;
-    try {
-      parsed = rawText ? JSON.parse(rawText) : null;
-    } catch {
-      parsed = rawText || null;
-    }
-    const data = unwrapBody(parsed);
-
-    if (data && typeof data === "object") {
-      assertFlowSuccess("DOWNLOAD_FILE", data);
-      return data;
-    }
-
-    if (typeof data === "string" && data.trim()) {
-      return {
-        success: true,
-        fileContent: data,
-        filePath: payload.filePath || "",
-        fileName: fileNameFromPath(payload.filePath),
-      };
-    }
-
-    return data;
-  }
-
-  // Flow returned raw binary content: re-encode to base64 for the browser client.
-  const buffer = Buffer.from(await response.arrayBuffer());
-  return {
-    success: true,
-    fileContent: buffer.toString("base64"),
-    filePath: payload.filePath || "",
-    fileName: fileNameFromPath(payload.filePath),
-  };
 }

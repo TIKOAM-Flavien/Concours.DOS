@@ -1,7 +1,7 @@
-# Portail Depot Entreprises
+# Concours.DOS — Portail Depot Entreprises
 
 Portail React + Express pour piloter des invitations documentaires entreprise,
-generer des liens signes et echanger avec SharePoint via Power Automate.
+generer des liens signes et gerer les depots de pieces en stockage local.
 
 ## Sommaire
 
@@ -21,7 +21,7 @@ generer des liens signes et echanger avec SharePoint via Power Automate.
 Le produit expose deux interfaces:
 
 - `GET /admin`: console d'administration (projets, entreprises, pieces attendues, generation des liens signes).
-- `GET /depot?ctx=...&sig=...&alg=HS256`: portail entreprise securise pour depot et suivi des pieces.
+- `GET /depot?inv=...&sig=...&alg=HS256`: portail entreprise securise pour depot et suivi des pieces.
 
 Principes de securite:
 
@@ -34,29 +34,36 @@ Principes de securite:
 
 ### 2.1 Architecture technique
 
+Deux modes de deploiement :
+
+- **Monolithe** (`PORTAL_APP_ROLE=all`, dev local) : un processus Express sert admin + portail.
+- **Deux serveurs** (production cible) : VM interne **admin** + VM DMZ **portal**, base **PostgreSQL** partagee.
+
 ```text
-Utilisateur
-  -> Reverse proxy (IIS / Nginx)
-    -> Express (server/index.js)
-      -> SQLite (projets + entreprises)
-      -> Power Automate (GET/UPLOAD/UPDATE/DELETE/DOWNLOAD)
-        -> SharePoint
+Internet -> proxy externe -> Node (role=portal) -> PostgreSQL (zone donnees)
+Admins   -> proxy interne -> Node (role=admin)  -> PostgreSQL
+Les deux instances -> Power Automate (e-mails) ; fichiers sur disque local VPS
 ```
+
+Le staging fichiers (`PORTAL_UPLOAD_STAGING_DIR`) vit uniquement sur l'instance **portal**. Les depots sont finalises de facon synchrone a l'upload.
 
 ### 2.2 Separation frontend
 
 - `src/main.jsx` charge l'app portail entreprise (`src/app/App.jsx`).
 - `src/admin-main.jsx` charge l'app admin (`src/app/AdminApp.jsx`).
-- `npm run build:all` produit les bundles statiques (`dist-all`) servis par Express.
+- `npm run build:all` produit `dist-all` (monolithe).
+- `npm run build:portal` / `npm run build:admin` produisent `dist-portal` / `dist-admin` pour les images Docker scindees.
 
 ### 2.3 Flux metier principal
 
 1. L'admin cree un projet et ajoute des entreprises avec leurs pieces attendues.
-2. L'admin genere un lien signe par entreprise (ou envoie les invitations par email via un flow Power Automate dedie).
-3. L'entreprise ouvre `/depot` avec `ctx + sig + alg`.
-4. Le serveur verifie la signature et n'autorise que les operations scopees a l'invitation.
-5. Les operations documentaires transitent vers Power Automate puis SharePoint.
-6. L'admin peut relancer les entreprises au dossier incomplet via un second flow Power Automate.
+2. L'admin genere un lien signe stable par entreprise (ou envoie les invitations par email via un flow Power Automate dedie).
+3. L'entreprise ouvre `/depot` avec `inv + sig + alg` (identifiant opaque stocke cote serveur).
+4. Le serveur verifie la signature, retrouve l'invitation, puis hydrate le
+   projet, l'entreprise et les pieces attendues depuis PostgreSQL.
+5. L'ouverture du lien est tracee dans `invitation_events` et remontee dans l'admin.
+6. Les fichiers sont enregistres localement sur le VPS (staging portal) ; les e-mails passent par Power Automate si configure.
+7. L'admin peut relancer les entreprises au dossier incomplet via un second flow Power Automate.
 
 ## 3. Logique admin et lien signe
 
@@ -78,12 +85,13 @@ Controle d'acces:
 
 Format du lien:
 
-- `ctx`: payload canonique encode en base64url.
-- `sig`: HMAC SHA-256 du `ctx`, calcule avec `PORTAL_LINK_SECRET`.
+- `inv`: identifiant opaque (UUID) persiste en base (`signed_invitations`).
+- `sig`: HMAC SHA-256 de `inv`, calcule avec `PORTAL_LINK_SECRET`.
 - `alg`: `HS256`.
 
-Contenu fonctionnel du `ctx` (minimum attendu):
+Contenu fonctionnel du payload serveur (minimum attendu):
 
+- `projectId`, `companyDbId` si disponible
 - `companyId`, `companyName`
 - `submissionId`
 - `dossierId`
@@ -93,23 +101,51 @@ Contenu fonctionnel du `ctx` (minimum attendu):
 Comportement de verification:
 
 1. Verification a l'acces HTML `/depot` (refus immediat si invalide/expire).
-2. Verification a chaque appel API portail (`/api/portal/*`).
-3. Verification que la piece manipulee est autorisee par l'invitation.
-4. Verification que le fichier cible reste dans le perimetre `folderPath` de l'invitation.
+2. Hydratation depuis PostgreSQL du projet et de l'entreprise rattaches au lien.
+3. Relecture des pieces attendues courantes (`companies.expectedDocuments` +
+   `projects.customDocuments`). Si l'admin modifie la liste de pieces d'une
+   entreprise, le meme lien affiche les nouvelles pieces a deposer.
+4. Verification a chaque appel API portail (`/api/portal/*`).
+5. Verification que la piece manipulee est autorisee par l'etat courant en base.
+6. Verification que le fichier cible reste dans le perimetre `folderPath` courant.
 
-Resultat: un lien ne peut agir que pour l'entreprise et les pieces qu'il embarque.
+Resultat: un lien ne peut agir que pour l'entreprise rattachee en base et les
+pieces actuellement attendues pour cette entreprise. Le lien reste utilisable
+apres modification de la liste de pieces, tant que l'entreprise et le projet
+existent et que le lien n'est pas expire ou revoque.
+La generation de lien, l'envoi d'invitation et les relances reutilisent
+l'invitation active existante pour conserver une seule URL par entreprise.
+
+### 3.3 Suivi d'ouverture des invitations
+
+Chaque invitation signee peut produire des evenements serveur dans la table
+`invitation_events`:
+
+- `opened`: le HTML `/depot` a ete servi apres validation du lien.
+- `verified`: le frontend portail a confirme l'invitation via `/api/portal/verify`.
+- `admin_test_open`: ouverture volontaire marquee comme test admin.
+- `email_sent` / `email_reminder_sent`: envoi ou relance email cote admin.
+
+L'API admin `GET /api/admin/projects/:id/invitations` renvoie pour chaque
+entreprise les champs `hasOpened`, `openCount`, `firstOpenedAt` et
+`lastOpenedAt`. La page admin affiche alors `Jamais ouvert` ou `Ouvert N fois`
+dans la colonne Invitation.
+
+Note d'exploitation: certains clients mail ou solutions antispam peuvent
+precharger une URL et declencher un evenement `opened`. L'evenement `verified`
+est plus representatif d'une ouverture complete par le navigateur, car il
+necessite l'execution du frontend.
 
 ## 4. Variables d'environnement
 
 ### 4.1 Obligatoires (serveur)
 
 ```env
+PORTAL_APP_ROLE=all
+DATABASE_URL=postgresql://user:pass@host:5432/portail
 PORTAL_LINK_SECRET=replace-with-a-long-random-secret
 CLIENT_PORTAL_PUBLIC_URL=https://portal.example.com/depot
-POWER_AUTOMATE_GET_DOCUMENTS_URL=https://...
-POWER_AUTOMATE_UPLOAD_FILE_URL=https://...
-POWER_AUTOMATE_UPDATE_FILE_URL=https://...
-POWER_AUTOMATE_DELETE_FILE_URL=https://...
+# Documents : stockage local VPS uniquement (pas de flow Power Automate fichier).
 ```
 
 ### 4.2 Recommandees (serveur)
@@ -119,11 +155,13 @@ PORT=3001
 # Duree de validite des liens signes (minutes).
 # Valeur par defaut si non definie: 43200 (30 jours).
 PORTAL_LINK_TTL_MINUTES=43200
-POWER_AUTOMATE_DOWNLOAD_FILE_URL=https://...
+POWER_AUTOMATE_SEND_INVITATIONS_URL=https://...
+POWER_AUTOMATE_SEND_REMINDERS_URL=https://...
 # Emailing optionnel (cf. boutons "Envoyer invitations" et "Envoyer relances").
 POWER_AUTOMATE_SEND_INVITATIONS_URL=https://...
 POWER_AUTOMATE_SEND_REMINDERS_URL=https://...
-PORTAL_ADMIN_DB_PATH=/data/portail-entreprise/admin.db
+DATABASE_URL=postgresql://user:pass@host:5432/portail
+PORTAL_APP_ROLE=all
 PORTAL_MAX_BODY_MB=20
 PORTAL_FLOW_TIMEOUT_MS=120000
 # Recommande si un reverse proxy est utilise:
@@ -152,11 +190,8 @@ VITE_CLIENT_PORTAL_REQUIRED_DOCUMENTS=KBIS,URSSAF,RIB,ASSURANCE_RC
 Ne pas definir ces cles en `VITE_*`:
 
 - `VITE_CLIENT_PORTAL_LINK_SECRET`
-- `VITE_POWER_AUTOMATE_GET_DOCUMENTS_URL`
-- `VITE_POWER_AUTOMATE_DOWNLOAD_FILE_URL`
-- `VITE_POWER_AUTOMATE_UPLOAD_FILE_URL`
-- `VITE_POWER_AUTOMATE_UPDATE_FILE_URL`
-- `VITE_POWER_AUTOMATE_DELETE_FILE_URL`
+- `VITE_POWER_AUTOMATE_SEND_INVITATIONS_URL`
+- `VITE_POWER_AUTOMATE_SEND_REMINDERS_URL`
 
 Le script `scripts/check-public-env.mjs` bloque le build si elles existent.
 Le serveur les refuse aussi au demarrage pour eviter une configuration runtime
@@ -196,7 +231,7 @@ npm run check
 - Node.js 22 LTS.
 - Reverse proxy TLS (IIS, Nginx, Apache, F5, etc.).
 - Acces sortant du serveur vers les webhooks Power Automate.
-- Dossier persistant pour SQLite (`PORTAL_ADMIN_DB_PATH`).
+- PostgreSQL (`DATABASE_URL`) et, sur l'instance portal, volume staging (`PORTAL_UPLOAD_STAGING_DIR`).
 
 ### 6.2 Installation applicative
 
@@ -216,7 +251,7 @@ En production, le serveur quitte au demarrage si:
 
 - le build frontend est absent,
 - `PORTAL_LINK_SECRET` est absent,
-- un flow critique est absent (`GET_DOCUMENTS`, `UPLOAD`, `UPDATE`, `DELETE`).
+- les flows mail Power Automate (`SEND_INVITATIONS`, `SEND_REMINDERS`) sont absents si l'envoi email est requis.
 
 ### 6.3 Reverse proxy entreprise
 
@@ -290,7 +325,7 @@ server {
 Important: garder `/admin` non expose publiquement (ACL reseau, bastion, VPN, etc.).
 
 Pour un deploiement DSI complet (TLS 1.3, HSTS, ACL proxy, systemd/NSSM durci,
-sauvegarde SQLite a chaud, plan de reprise, conformite RGPD), suivre
+sauvegarde PostgreSQL, plan de reprise, conformite RGPD), suivre
 `docs/deployment-guide.md`. Pour la cartographie complete des mecanismes
 de securite cote serveur et client, voir `docs/security-report.md`.
 
@@ -301,15 +336,17 @@ de securite cote serveur et client, voir `docs/security-report.md`.
 3. `GET /depot` sans signature retourne `403`.
 4. Un lien signe genere depuis l'admin ouvre bien le portail.
 5. Upload / update / delete fonctionnent.
-6. Le flow `DOWNLOAD` est configure si la previsualisation est necessaire.
+6. La previsualisation des fichiers deposes fonctionne depuis le portail.
 
 ## 7. Exploitation et maintenance
 
-### 7.1 Base SQLite
+### 7.1 Base PostgreSQL
 
-- Moteur: `better-sqlite3`.
-- Journal: WAL active.
-- Sauvegarde: arreter le service, sauvegarder `admin.db`, `admin.db-wal`, `admin.db-shm`.
+- Connexion: `DATABASE_URL` (pool `pg`, migrations au demarrage).
+- Sauvegarde: politique DSI (`pg_dump` / PITR / equivalent).
+- Les ouvertures de liens sont historisees dans `invitation_events`
+  (`invitationId`, `eventType`, `source`, hash IP, user-agent tronque,
+  metadata JSON, date).
 
 ### 7.2 Rotation secret de signature
 
@@ -327,18 +364,20 @@ Surveiller au minimum:
 - `GET /readyz`
 - logs Express
 - echecs Power Automate
-- espace disque du dossier SQLite
+- espace disque staging (instance portal) et sante PostgreSQL
 
 ## 8. Endpoints utiles
 
 - `GET /health`: liveness.
 - `GET /readyz`: readiness (build + secret + flows).
 - `GET /admin`: UI admin locale uniquement.
-- `GET /depot?ctx=...&sig=...&alg=HS256`: UI portail entreprise securisee.
+- `GET /depot?inv=...&sig=...&alg=HS256`: UI portail entreprise securisee.
 - `GET /api/admin/security`: statut securite/flows (admin local).
 - `POST /api/admin/invitations/sign`: generation de lien signe (admin local).
 - `POST /api/admin/invitations/revoke`: revocation d'un lien signe (admin local).
 - `GET /api/admin/invitations/revoked`: liste des liens revoques (admin local).
+- `GET /api/admin/projects/:id/invitations`: derniers liens par entreprise avec
+  statut d'envoi, relances et ouvertures tracees.
 - `POST /api/admin/projects/:id/send-invitations`: genere et envoie par email le lien signe aux entreprises ciblees (admin local, flow `SEND_INVITATIONS`).
 - `POST /api/admin/projects/:id/send-reminders`: envoie une relance aux entreprises au dossier incomplet (admin local, flow `SEND_REMINDERS`).
 - `POST /api/portal/documents|upload|update|delete|download`: operations documentaires scopees par invitation signee.
@@ -347,8 +386,10 @@ Surveiller au minimum:
 
 ```text
 server/
-  index.js            # API Express + securite + serving des builds
-  db.js               # stockage SQLite projets/entreprises
+  index.js            # entree (env + startServer)
+  startServer.js      # bootstrap par PORTAL_APP_ROLE
+  routes/             # admin, portal, health, static
+  db/                 # PostgreSQL (schema, pool, repositories)
   security.js         # signature HMAC et verification des invitations
   flows.js            # appels Power Automate
 src/
@@ -367,6 +408,4 @@ scripts/
 - `docs/security-audit-2026-04.md` : audit de securite (avril 2026, 27 findings).
 - `docs/production-guide.md` : guide de mise en production (env, prerequis).
 - `docs/operations-guide.md` : guide d'exploitation (runbook, depannage).
-- `docs/sharepoint-metadata.md` : contrat de metadonnees SharePoint.
-- `docs/power-automate-flows.md` : contrats des flows Power Automate (API serveur -> flows).
 - `docs/roadmap.md` : feuille de route fonctionnelle et technique.

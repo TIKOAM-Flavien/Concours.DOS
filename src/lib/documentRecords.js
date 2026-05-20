@@ -1,4 +1,4 @@
-import { normalizeDocumentId } from "../config/documentCatalog";
+import { normalizeDocumentId } from "../config/documentCatalog.js";
 
 const FIELD_CANDIDATES = {
   name: [
@@ -29,14 +29,7 @@ const FIELD_CANDIDATES = {
     "ID",
     "Id",
   ],
-  link: [
-    "Link",
-    "sharePointUrl",
-    "SharePointUrl",
-    "webUrl",
-    "EncodedAbsUrl",
-    "AbsoluteUri",
-  ],
+  link: ["Link", "webUrl", "EncodedAbsUrl", "AbsoluteUri"],
   modifiedAt: ["Modified", "TimeLastModified", "LastModified", "date"],
   sizeBytes: ["Length", "Size", "size", "File_x0020_Size"],
   documentType: [
@@ -85,6 +78,10 @@ const FIELD_CANDIDATES = {
   localJobId: ["localJobId", "jobId"],
   syncStatus: ["SyncStatus", "syncStatus", "status"],
   syncError: ["syncError", "errorMessage", "ErrorMessage"],
+  reviewStatus: ["reviewStatus", "ReviewStatus"],
+  reviewComment: ["reviewComment", "ReviewComment"],
+  reviewedAt: ["reviewedAt", "ReviewedAt"],
+  reviewedBy: ["reviewedBy", "ReviewedBy"],
 };
 
 function normalizeKey(value) {
@@ -230,6 +227,18 @@ function buildRecord(row, index, documents) {
     syncError: String(
       readFirstMatch(row, FIELD_CANDIDATES.syncError) || ""
     ).trim(),
+    reviewStatus: String(
+      readFirstMatch(row, FIELD_CANDIDATES.reviewStatus) || "pending"
+    ).trim(),
+    reviewComment: String(
+      readFirstMatch(row, FIELD_CANDIDATES.reviewComment) || ""
+    ).trim(),
+    reviewedAt: String(
+      readFirstMatch(row, FIELD_CANDIDATES.reviewedAt) || ""
+    ).trim(),
+    reviewedBy: String(
+      readFirstMatch(row, FIELD_CANDIDATES.reviewedBy) || ""
+    ).trim(),
   };
 }
 
@@ -239,7 +248,7 @@ function sortByModifiedDescending(left, right) {
   return rightDate - leftDate;
 }
 
-export function normalizeSharePointRecords(rows, context) {
+export function normalizeDocumentRecords(rows, context) {
   return (rows || [])
     .map((row, index) => buildRecord(row, index, context.documents))
     .filter((record) => matchesContext(record, context))

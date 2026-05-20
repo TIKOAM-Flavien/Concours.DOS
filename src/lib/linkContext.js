@@ -25,150 +25,124 @@ function readQuery(params, aliases) {
   return "";
 }
 
-function decodeBase64Url(value) {
-  const source = String(value || "").trim();
-  if (!source) return "";
-  const padded = source.replace(/-/g, "+").replace(/_/g, "/");
-  const padLength = (4 - (padded.length % 4)) % 4;
-  const binary = atob(`${padded}${"=".repeat(padLength)}`);
-  const bytes = Uint8Array.from(binary, (character) =>
-    character.charCodeAt(0)
-  );
-  return new TextDecoder().decode(bytes);
-}
-
-function parseStructuredContext(params) {
-  const encoded = firstValue(params.get("ctx"), params.get("context"));
-  if (!encoded) return {};
-
-  try {
-    return JSON.parse(decodeBase64Url(encoded));
-  } catch {
-    return {};
-  }
-}
-
 function normalizeDocumentSource(value) {
   if (Array.isArray(value)) return value;
   if (typeof value === "string") return splitCsv(value);
   return [];
 }
 
+export function applyVerifiedInvitation(context, invitation = {}) {
+  if (!invitation || typeof invitation !== "object") return context;
+
+  const documents = resolveDocumentList(
+    invitation.documents?.length ? invitation.documents : context.documents
+  );
+
+  return {
+    ...context,
+    projectId: firstValue(invitation.projectId, context.projectId),
+    contestName: firstValue(
+      invitation.contestName,
+      context.contestName,
+      portalEnv.defaultContestName
+    ),
+    dossierId: firstValue(invitation.dossierId, context.dossierId),
+    folderPath: firstValue(invitation.folderPath, context.folderPath),
+    companyId: firstValue(invitation.companyId, context.companyId),
+    companyName: firstValue(invitation.companyName, context.companyName, "Entreprise invitee"),
+    companyEmail: firstValue(invitation.companyEmail, context.companyEmail),
+    contactName: firstValue(invitation.contactName, context.contactName),
+    submissionId: firstValue(invitation.submissionId, context.submissionId),
+    supportEmail: firstValue(invitation.supportEmail, context.supportEmail),
+    supportPhone: firstValue(invitation.supportPhone, context.supportPhone),
+    websiteUrl: firstValue(invitation.websiteUrl, context.websiteUrl),
+    deadline: firstValue(invitation.deadline, context.deadline),
+    documents,
+    verified: {
+      exp: invitation.exp || "",
+      iat: invitation.iat || "",
+      nonce: invitation.nonce || "",
+    },
+    link: {
+      ...context.link,
+      signatureStatus: "ok",
+    },
+  };
+}
+
 export function resolveLinkContext() {
   const params = new URLSearchParams(window.location.search);
-  const rawCtx = firstValue(params.get("ctx"), params.get("context"));
-  const structured = parseStructuredContext(params);
+  const inv = firstValue(params.get("inv"), params.get("invitationId"));
   const sig = firstValue(params.get("sig"), params.get("signature"));
   const alg = firstValue(params.get("alg"), params.get("algorithm"), "HS256");
-  const preferStructuredContext = Boolean(rawCtx);
-  const pickField = (structuredValue, queryAliases = [], fallback = "") =>
-    firstValue(
-      structuredValue,
-      preferStructuredContext ? "" : readQuery(params, queryAliases),
-      fallback
-    );
+  const source = firstValue(params.get("source"));
+  const signedLink = Boolean(inv);
+
   const requestedDocuments = normalizeDocumentSource(
-    structured.documents ||
-      structured.documentTypes ||
-      (preferStructuredContext
-        ? []
-        : readQuery(params, ["documents", "documentTypes", "pieces"]))
+    signedLink ? [] : readQuery(params, ["documents", "documentTypes", "pieces"])
   );
 
   const documents = resolveDocumentList(
-    requestedDocuments.length
-      ? requestedDocuments
-      : preferStructuredContext
-      ? []
-      : portalEnv.requiredDocuments
+    requestedDocuments.length ? requestedDocuments : portalEnv.requiredDocuments
   );
 
   const context = {
     brandName: portalEnv.brandName,
     portalTitle: portalEnv.portalTitle,
     portalSubtitle: portalEnv.portalSubtitle,
-    projectId: pickField(
-      structured.projectId,
-      preferStructuredContext ? [] : ["projectId", "projetId"]
-    ),
-    contestName: firstValue(
-      structured.contestName,
-      structured.consultationName,
-      preferStructuredContext
-        ? ""
-        : readQuery(params, ["contestName", "consultation", "competition"]),
-      portalEnv.defaultContestName,
-      "Consultation architecture"
-    ),
-    dossierId: pickField(
-      structured.dossierId,
-      ["dossierId", "folderKey"],
-      portalEnv.defaultDossierId
-    ),
-    folderPath: pickField(
-      structured.folderPath,
-      ["folderPath", "sharepointFolder"],
-      portalEnv.defaultFolderPath
-    ),
-    companyId: pickField(
-      firstValue(structured.companyId, structured.enterpriseId, structured.societeId),
-      preferStructuredContext ? [] : ["companyId", "entrepriseId", "societeId"]
-    ),
-    companyName: pickField(
-      firstValue(structured.companyName, structured.enterpriseName, structured.societe),
-      preferStructuredContext ? [] : ["companyName", "entreprise", "societe"],
-      "Entreprise invitee"
-    ),
-    companyEmail: pickField(
-      structured.companyEmail,
-      preferStructuredContext ? [] : ["companyEmail", "email"]
-    ),
-    contactName: pickField(
-      structured.contactName,
-      preferStructuredContext ? [] : ["contactName", "contact"]
-    ),
-    submissionId: pickField(
-      firstValue(structured.submissionId, structured.invitationId, structured.token),
-      preferStructuredContext ? [] : ["submissionId", "invitationId", "token", "accessKey"]
-    ),
-    supportEmail: pickField(
-      structured.supportEmail,
-      ["supportEmail"],
-      portalEnv.supportEmail
-    ),
-    supportPhone: pickField(
-      structured.supportPhone,
-      ["supportPhone"],
-      portalEnv.supportPhone
-    ),
-    websiteUrl: pickField(
-      structured.websiteUrl,
-      ["websiteUrl"],
-      portalEnv.websiteUrl
-    ),
-    deadline: pickField(
-      firstValue(structured.deadline, structured.dateLimite),
-      preferStructuredContext ? [] : ["deadline", "dateLimite", "echeance"]
-    ),
+    projectId: signedLink ? "" : readQuery(params, ["projectId", "projetId"]),
+    contestName: signedLink
+      ? portalEnv.defaultContestName
+      : firstValue(
+          readQuery(params, ["contestName", "consultation", "competition"]),
+          portalEnv.defaultContestName,
+          "Consultation architecture"
+        ),
+    dossierId: signedLink
+      ? ""
+      : firstValue(readQuery(params, ["dossierId", "folderKey"]), portalEnv.defaultDossierId),
+    folderPath: signedLink
+      ? ""
+      : firstValue(
+          readQuery(params, ["folderPath"]),
+          portalEnv.defaultFolderPath
+        ),
+    companyId: signedLink
+      ? ""
+      : firstValue(readQuery(params, ["companyId", "entrepriseId", "societeId"])),
+    companyName: signedLink
+      ? "Entreprise invitee"
+      : firstValue(readQuery(params, ["companyName", "entreprise", "societe"]), "Entreprise invitee"),
+    companyEmail: signedLink ? "" : readQuery(params, ["companyEmail", "email"]),
+    contactName: signedLink ? "" : readQuery(params, ["contactName", "contact"]),
+    submissionId: signedLink
+      ? ""
+      : firstValue(
+          readQuery(params, ["submissionId", "invitationId", "token", "accessKey"])
+        ),
+    supportEmail: signedLink
+      ? portalEnv.supportEmail
+      : firstValue(readQuery(params, ["supportEmail"]), portalEnv.supportEmail),
+    supportPhone: signedLink
+      ? portalEnv.supportPhone
+      : firstValue(readQuery(params, ["supportPhone"]), portalEnv.supportPhone),
+    websiteUrl: signedLink
+      ? portalEnv.websiteUrl
+      : firstValue(readQuery(params, ["websiteUrl"]), portalEnv.websiteUrl),
+    deadline: signedLink
+      ? ""
+      : firstValue(readQuery(params, ["deadline", "dateLimite", "echeance"])),
     documents,
+    verified: null,
     warnings: [],
     link: {
-      rawCtx,
+      inv,
       sig,
       alg,
+      source,
       signatureStatus: "unchecked",
-      decoded: structured,
     },
   };
-
-  if (structured?.exp) {
-    const expDate = new Date(structured.exp);
-    if (!Number.isNaN(expDate.getTime()) && Date.now() > expDate.getTime()) {
-      context.warnings.push(
-        "Lien expire: la date de validite (exp) est depassee."
-      );
-    }
-  }
 
   if (context.link.alg && context.link.alg !== "HS256") {
     context.warnings.push(
@@ -176,34 +150,36 @@ export function resolveLinkContext() {
     );
   }
 
-  if (context.link.rawCtx && !context.link.sig) {
+  if (context.link.inv && !context.link.sig) {
     context.warnings.push(
-      "Le lien ctx est present mais non signe (sig manquant)."
+      "L'identifiant d'invitation est present mais la signature (sig) est manquante."
     );
   }
 
-  if (!context.companyId) {
-    context.warnings.push(
-      "Le lien ne porte pas d'identifiant entreprise. Ajoutez companyId ou entrepriseId."
-    );
-  }
+  if (!signedLink) {
+    if (!context.companyId) {
+      context.warnings.push(
+        "Le lien ne porte pas d'identifiant entreprise. Ajoutez companyId ou entrepriseId."
+      );
+    }
 
-  if (!context.submissionId) {
-    context.warnings.push(
-      "Le lien ne porte pas d'identifiant de soumission. Ajoutez submissionId ou token."
-    );
-  }
+    if (!context.submissionId) {
+      context.warnings.push(
+        "Le lien ne porte pas d'identifiant de soumission. Ajoutez submissionId ou token."
+      );
+    }
 
-  if (!context.folderPath) {
-    context.warnings.push(
-      "Aucun folderPath n'est defini. Les depots seront bloques tant que le dossier SharePoint cible n'est pas connu."
-    );
-  }
+    if (!context.folderPath) {
+      context.warnings.push(
+        "Aucun chemin de dossier n'est defini sur le projet (optionnel, metadata uniquement)."
+      );
+    }
 
-  if (!context.dossierId) {
-    context.warnings.push(
-      "Aucun dossierId n'est defini. Ajoutez-le si le flow l'utilise pour filtrer ou tagger les documents."
-    );
+    if (!context.dossierId) {
+      context.warnings.push(
+        "Aucun dossierId n'est defini. Ajoutez-le si le flow l'utilise pour filtrer ou tagger les documents."
+      );
+    }
   }
 
   return context;

@@ -1,7 +1,7 @@
 # Rapport de sécurité
 
 Date d'émission : 2026-05-12
-Périmètre : `portail-entreprise` (Express 5 + React 18 + SQLite + Power Automate).
+Périmètre : `portail-entreprise` (Express 5 + React 18 + PostgreSQL + Power Automate e-mails + stockage local VPS).
 
 Ce document est destiné à la DSI et à l'équipe sécurité. Il décrit
 **exhaustivement** :
@@ -26,7 +26,7 @@ Voir aussi :
 | Authentification entreprise | Lien signé HMAC-SHA256 — pas de mot de passe, pas de session. |
 | Authentification admin | Restreint au socket loopback de l'hôte (`req.socket.remoteAddress`). |
 | Chiffrement en transit | HTTPS terminé au reverse proxy + HSTS app. |
-| Chiffrement au repos | Aucune donnée sensible persistée localement (SQLite = métadonnées projet uniquement). Fichiers déposés stockés dans SharePoint (chiffrement Microsoft 365). |
+| Chiffrement au repos | Métadonnées en PostgreSQL ; fichiers déposés sur le disque local du portal (`PORTAL_UPLOAD_STAGING_DIR`). |
 | OWASP Top 10 (2021) couverture | A01..A10 traités, voir §6. |
 | CVE production (npm audit) | 0 |
 | Auditabilité | Journal `audit_log` SQLite, scrub à 90 j, hash conservé. |
@@ -44,7 +44,7 @@ Voir aussi :
 | Ouvrir le portail | `GET /depot?ctx=&sig=&alg=HS256` | — | Signature HMAC, `exp`, `deadline`, payload complet, non révoqué |
 | Lister les pièces reçues | onglet "Reçues" | `POST /api/portal/documents` | Signature à nouveau vérifiée, budget journalier, rate-limit |
 | Déposer une pièce | bouton "Déposer" | `POST /api/portal/upload` | Signature, document autorisé, taille fichier, rate-limit upload, budget |
-| Remplacer une pièce | bouton "Remplacer" | `POST /api/portal/update` | Signature, document autorisé, `fileIdentifier`+`filePath` vérifiés via GET_DOCUMENTS, type de pièce contrôlé |
+| Remplacer une pièce | bouton "Remplacer" | `POST /api/portal/update` | Signature, document autorisé, référence locale vérifiée, type de pièce contrôlé |
 | Supprimer une pièce | bouton "Supprimer" | `POST /api/portal/delete` | Signature, document autorisé, identifiant vérifié, audit |
 | Prévisualiser / télécharger | bouton "Aperçu" | `POST /api/portal/download` | Signature, `filePath` dans le dossier de l'invitation, type MIME inféré côté client |
 | Suivi visuel (progression, échéance, contact) | bandeau & cartes | — | Affichage uniquement après vérification (sinon `AccessGateScreen` minimal) |
@@ -67,7 +67,7 @@ Voir aussi :
 | Envoyer une relance | bouton "Envoyer relances" | `POST /api/admin/projects/:id/send-reminders` |
 | Forcer une purge / scrub | bouton "Maintenance" | `POST /api/admin/maintenance/cleanup` |
 | État technique | bandeau | `GET /api/admin/security` |
-| Inspecter SharePoint pour debug | sous-fenêtre | `POST /api/admin/documents` |
+| Inspecter les dépôts locaux pour debug | suivi admin | `GET /api/admin/projects/:id/documents` |
 
 Toutes ces routes sont protégées par le middleware `requireLocalAdmin`
 (`server/index.js:287-293`) qui refuse toute requête dont
@@ -97,8 +97,8 @@ un orchestrateur de basculer du trafic vers une instance non prête.
   révoquer un lien, mais ne peut pas contourner la signature (la clé
   HMAC reste serveur). Une compromission de l'hôte admin compromet
   toutefois la confidentialité de la clé : voir §10.
-- **Confiance étendue** accordée à Power Automate : c'est l'unique passerelle
-  vers SharePoint. Les URLs des flows sont des secrets serveurs.
+- **Confiance étendue** accordée à Power Automate pour l'envoi d'e-mails uniquement.
+  Les URLs des flows mail sont des secrets serveurs.
 
 ### 3.2 Chaîne de vérification d'une requête entreprise
 
@@ -138,9 +138,9 @@ Tout maillon manquant produit `400`, `403`, `429`, ou `503` selon la nature.
 
 | Composant | Fichier | Référence |
 | --- | --- | --- |
-| Signature HMAC + vérification | `server/security.js` | `verifySignedContext`, `buildSignedInvitationUrl` |
+| Signature HMAC + vérification | `server/security.js` | `verifySignedInvitation`, `persistAndSignInvitation` |
 | Sanitization payload signé | `server/security.js` | `sanitizeInvitationContext` |
-| Normalisation chemin SharePoint | `shared/sharepointPath.js` | partagé client/serveur |
+| Normalisation chemin dossier | `shared/folderPath.js` | partagé client/serveur |
 | Catalogue documents canonique | `src/config/documentCatalog.js` | `normalizeDocumentId`, `resolveDocumentList` |
 | Garde locale admin | `server/index.js` | `requireLocalAdmin` |
 | Garde signed link HTML | `server/index.js` | `requireSignedDepotLink` |
@@ -159,24 +159,22 @@ Tout maillon manquant produit `400`, `403`, `429`, ou `503` selon la nature.
 
 ### 4.1 Authentification capacité-basée (lien signé)
 
-- **Format** : `ctx` (payload JSON canonique encodé base64url) + `sig` (HMAC-SHA256 base64url) + `alg=HS256`.
-- **Canonicalisation** : JSON trié récursivement par clés (`sortKeysDeep`) avant signature pour garantir la stabilité.
+- **Format** : `inv` (UUID opaque, clé en base) + `sig` (HMAC-SHA256 de `inv`, base64url) + `alg=HS256`. Le payload métier est stocké dans `signed_invitations` (PostgreSQL), pas dans l'URL.
 - **Comparaison** : `crypto.timingSafeEqual` pour éviter les attaques temporelles.
 - **Champs garantis dans le payload** : `companyId`, `companyName`,
   `submissionId`, `dossierId`, `folderPath`, `documents`, `nonce`, `iat`,
-  `exp`, `deadline`. Tous tamper-evident grâce à la signature.
+  `exp`, `deadline`. Servis au client via `POST /api/portal/verify` après contrôle HMAC.
 - **Durée de vie** : `exp` (par défaut 30 jours) + double porte `deadline`
   (cut-off métier indépendant). Plafond serveur 1 an
   (`PORTAL_LINK_TTL_MAX_MINUTES`).
-- **Révocation** : table SQLite `revoked_invitations` indexée par
-  `sha256(ctx)` (`hashSignedContextId`). Vérifiée à chaque appel et à
-  l'accès HTML.
+- **Révocation** : table `revoked_invitations` indexée par l'UUID `inv`.
+  Vérifiée à chaque appel API et à l'accès HTML.
 - **Rotation** : changer `PORTAL_LINK_SECRET` invalide tous les liens
   existants (cf. §10.2 du guide de déploiement).
 
 ### 4.2 Confinement par invitation
 
-- Chaque appel API exige le triplet `(ctx, sig, alg)`. Le serveur ne se
+- Chaque appel API exige le triplet `(inv, sig, alg)`. Le serveur ne se
   fie **jamais** aux paramètres "métier" que le navigateur enverrait en
   parallèle (companyId, folderPath, etc.) : il les **reconstruit depuis le
   payload signé**.
@@ -184,10 +182,10 @@ Tout maillon manquant produit `400`, `403`, `429`, ou `503` selon la nature.
   la liste signée. Tout autre type est `403`.
 - `ensurePathWithinFolder` + `ensureFileReferenceAllowed` : le `filePath`
   ou `fileIdentifier` envoyé doit être (1) à l'intérieur du `folderPath`
-  signé ou (2) reconnu par GET_DOCUMENTS dans le périmètre
+  signé ou (2) reconnu dans les enregistrements locaux du périmètre
   `(dossierId, companyId, submissionId)` signé.
 - `verifyFileReferenceAndDocumentType` : sur `update` / `delete`, le type
-  réel du document SharePoint est croisé avec le `documentId` envoyé pour
+  réel du document local est croisé avec le `documentId` envoyé pour
   empêcher un attaquant de remplacer un KBIS par un fichier URSSAF.
 
 ### 4.3 Headers HTTP durcis
@@ -309,7 +307,7 @@ l'action restent disponibles pour preuve d'intégrité.
 | **S**poofing — emprunter une autre entreprise | `/depot`, `/api/portal/*` | Lien signé HMAC unique par entreprise + `companyId` signé |
 | **T**ampering — modifier folderPath / documents autorisés | URL `ctx` | HMAC ; toute altération produit `invalid_sig` |
 | **R**epudiation — nier avoir déposé / supprimé une pièce | API portail | `audit_log` + `payloadHash` + IP + horodatage |
-| **I**nformation disclosure — récupérer un fichier d'une autre entreprise | `/api/portal/download` | `ensureFileReferenceAllowed` + `folderPath` signé + filtrage GET_DOCUMENTS scopé |
+| **I**nformation disclosure — récupérer un fichier d'une autre entreprise | `/api/portal/download` | `ensureFileReferenceAllowed` + `folderPath` signé + contrôle d'appartenance au record local |
 | **D**enial of Service — saturer le portail | `/api/portal/upload` | Rate-limit IP + budget journalier par submissionId + body limit + timeout flow |
 | **E**levation of privilege — atteindre l'admin | `/admin`, `/api/admin/*` | `requireLocalAdmin` (socket loopback) + ACL reverse proxy |
 | Replay d'un lien valide après remise en main | `/depot` | `exp` + révocation manuelle |
@@ -321,7 +319,7 @@ l'action restent disponibles pour preuve d'intégrité.
 | Smuggling via proxy | `/api/portal/*` | `requireTrustedBrowserOrigin` + `TRUST_PROXY` conservateur |
 | Exposition secrets au navigateur | build Vite | Liste noire `VITE_*` + check pré-build + check démarrage serveur |
 | Compromission de l'hôte admin | `/admin` | Hors périmètre app : politique OS (MFA, AD, bastion) |
-| Compromission de SharePoint | flow upload | Hors périmètre app : politique tenant M365 |
+| Compromission du disque portal | staging local | Chiffrement disque + sauvegardes + durcissement OS |
 
 ---
 
@@ -367,9 +365,8 @@ l'action restent disponibles pour preuve d'intégrité.
 3. **Rate-limit en mémoire** : reset à chaque redémarrage et non partagé.
    Pour un déploiement multi-instances, brancher un store partagé
    (cf. N-07 dans `security-audit-2026-04.md`).
-4. **Pas de scan antivirus** : les fichiers transitent en base64 et sont
-   stockés tels quels dans SharePoint. Antivirus = responsabilité du
-   tenant M365 (Defender for Cloud Apps recommandé).
+4. **Pas de scan antivirus intégré** : les fichiers sont stockés tels quels
+   sur le disque local. Antivirus = responsabilité de l'hôte / DSI.
 5. **Upload base64/JSON** : surcoût RAM +33%. Refactor multipart streaming
    prévu (P-02 dans l'audit 2026-04).
 6. **N+1 sur `/api/admin/projects`** : volumes attendus faibles, refactor
@@ -399,7 +396,7 @@ l'action restent disponibles pour preuve d'intégrité.
 - **Documentation** : ajout de `docs/deployment-guide.md` et du
   présent rapport.
 - **Réorganisation des docs** : `POWER AUTOMATE FLOW.md` déplacé en
-  `docs/power-automate-flows.md` ; titres harmonisés en français.
+  `docs/security-audit-2026-04.md` ; titres harmonisés en français.
 
 ---
 

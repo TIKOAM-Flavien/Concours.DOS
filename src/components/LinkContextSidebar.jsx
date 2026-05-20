@@ -20,9 +20,16 @@ function computeExpiryBadge(exp) {
     : { tone: "ok", label: "Valide" };
 }
 
+function truncateInvitationId(id) {
+  const text = String(id || "").trim();
+  if (!text) return "-";
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 8)}…${text.slice(-4)}`;
+}
+
 export default function LinkContextSidebar({ context }) {
-  const decoded = context.link?.decoded || {};
-  const expiry = computeExpiryBadge(decoded.exp);
+  const verified = context.verified || {};
+  const expiry = computeExpiryBadge(verified.exp);
 
   return (
     <aside className="portal-sidebar">
@@ -30,7 +37,7 @@ export default function LinkContextSidebar({ context }) {
         <div className="side-panel__head">
           <div>
             <p className="side-kicker">Lien</p>
-            <h2 className="side-title">Contexte decode</h2>
+            <h2 className="side-title">Contexte verifie</h2>
           </div>
           <div className="pill-row">
             <span className={`pill pill--${expiry.tone}`}>{expiry.label}</span>
@@ -53,35 +60,35 @@ export default function LinkContextSidebar({ context }) {
         <dl className="kv">
           <div>
             <dt>Entreprise</dt>
-            <dd>{displayValue(decoded.companyName || context.companyName)}</dd>
+            <dd>{displayValue(context.companyName)}</dd>
           </div>
           <div>
             <dt>CompanyId</dt>
-            <dd>{displayValue(decoded.companyId || context.companyId)}</dd>
+            <dd>{displayValue(context.companyId)}</dd>
           </div>
           <div>
             <dt>Soumission</dt>
-            <dd>{displayValue(decoded.submissionId || context.submissionId)}</dd>
+            <dd>{displayValue(context.submissionId)}</dd>
           </div>
           <div>
             <dt>Dossier</dt>
-            <dd>{displayValue(decoded.dossierId || context.dossierId)}</dd>
+            <dd>{displayValue(context.dossierId)}</dd>
           </div>
           <div>
             <dt>FolderPath</dt>
-            <dd>{displayValue(decoded.folderPath || context.folderPath)}</dd>
+            <dd>{displayValue(context.folderPath)}</dd>
           </div>
           <div>
-            <dt>Nonce</dt>
-            <dd>{displayValue(decoded.nonce)}</dd>
+            <dt>ID invitation</dt>
+            <dd>{truncateInvitationId(context.link?.inv)}</dd>
           </div>
           <div>
             <dt>IAT</dt>
-            <dd>{displayIso(decoded.iat)}</dd>
+            <dd>{displayIso(verified.iat)}</dd>
           </div>
           <div>
             <dt>EXP</dt>
-            <dd>{displayIso(decoded.exp)}</dd>
+            <dd>{displayIso(verified.exp)}</dd>
           </div>
         </dl>
       </section>
@@ -97,7 +104,7 @@ export default function LinkContextSidebar({ context }) {
         <dl className="kv">
           <div>
             <dt>Acces depot</dt>
-            <dd>{context.link?.rawCtx ? "Lien signe present" : "Lien signe absent"}</dd>
+            <dd>{context.link?.inv ? "Lien signe present" : "Lien signe absent"}</dd>
           </div>
           <div>
             <dt>Verification</dt>
@@ -113,7 +120,7 @@ export default function LinkContextSidebar({ context }) {
           </div>
           <div>
             <dt>FolderPath</dt>
-            <dd>{displayValue(context.folderPath || decoded.folderPath, "Manquant")}</dd>
+            <dd>{displayValue(context.folderPath, "Manquant")}</dd>
           </div>
         </dl>
       </section>

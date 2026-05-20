@@ -1,62 +1,57 @@
+# Monolith (dev / transitional): admin + portal in one container, PostgreSQL required.
 services:
   portail:
     build:
       context: .
+      target: all
       secrets:
         - vite_build_env
     image: portail-entreprise-dev:latest
     container_name: portail-entreprise-dev
     restart: unless-stopped
-    # Host port 3002 (3001 is already used on the host). The container listens
-    # on 3002 internally too, so a reverse proxy (NPM/Traefik/nginx) reaching
-    # the container by its docker DNS name can target `portail-entreprise-dev:3002`.
     ports:
       - "3002:3002"
     environment:
       NODE_ENV: production
       PORT: "3002"
-      PORTAL_ADMIN_DB_PATH: /data/admin.db
+      PORTAL_APP_ROLE: all
+      DATABASE_URL: postgresql://portail:portail@postgres:5432/portail
       PORTAL_UPLOAD_STAGING_DIR: /data/uploads
-      # The proxy (NPM) terminates TLS and forwards over the docker bridge
-      # network. `uniquelocal` trusts loopback + RFC1918 hops, which lets
-      # Express expose the real client IP via X-Forwarded-For.
-      TRUST_PROXY: "uniquelocal"
-      # Public URL used to mint signed `/depot` invitation links. Must match
-      # what NPM serves to the outside world.
-      CLIENT_PORTAL_PUBLIC_URL: "https://concoursdev.bebou2bebou.fr/depot"
-      # Comma-separated list of IPv4 / CIDR clients allowed to reach /admin
-      # and /api/admin* via the proxy. Loopback (127.0.0.1, ::1) is always
-      # allowed. Set this in `.env.production` so it stays out of git.
-      # PORTAL_ADMIN_ALLOWED_IPS: "203.0.113.10,198.51.100.0/24"
+      TRUST_PROXY: "1"
+      # Docker Desktop: browser hits come from the bridge network, not 127.0.0.1.
+      PORTAL_ADMIN_ALLOWED_IPS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
+      CLIENT_PORTAL_PUBLIC_URL: "http://localhost:3002/depot"
     env_file:
-      # Holds secrets/integration URLs (PORTAL_LINK_SECRET, Power Automate
-      # webhooks, PORTAL_ADMIN_ALLOWED_IPS, ...). Optional so `docker compose
-      # up` still starts if you haven't created it yet, but the server will
-      # refuse to serve until PORTAL_LINK_SECRET + Power Automate URLs are
-      # configured (see /readyz).
       - path: .env.production
         required: false
     volumes:
       - portail_data:/data
-    # Uncomment and rename to attach the container to your existing nginx
-    # proxy network. With the default Docker bridge + the `ports:` mapping
-    # above, NPM can also forward to `host.docker.internal:3002` or
-    # `<docker-host-ip>:3002` if it lives on a different network.
-    # networks:
-    #   - default
-    #   - proxy
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-# networks:
-#   proxy:
-#     external: true
-#     name: nginxproxymanager_default
+  postgres:
+    image: postgres:16-alpine
+    container_name: portail-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: portail
+      POSTGRES_PASSWORD: portail
+      POSTGRES_DB: portail
+    ports:
+      - "5432:5432"
+    volumes:
+      - portail_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portail -d portail"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 secrets:
   vite_build_env:
-    # Build-time only (Vite). Contains the public VITE_* branding variables.
-    # Copy `docker-build.env.example` to `.env.vite.build`, fill it in, then
-    # `docker compose build`. Never commit this file.
     file: .env.vite.build
 
 volumes:
   portail_data:
+  portail_pg_data:

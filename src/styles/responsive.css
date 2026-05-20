@@ -1,0 +1,225 @@
+@media (max-width: 1080px) {
+  .portal {
+    padding: 18px 20px 22px;
+  }
+
+  .admin-shell {
+    padding: 18px 20px 22px;
+  }
+
+  .portal-header,
+  .company-panel,
+  .admin-header {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-header__right,
+  .admin-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    position: static;
+  }
+
+  .admin-tracking-toolbar,
+  .admin-tracking-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-header__status {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-header:not(.portal-header) .admin-header__status {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-form--split {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-form--split .admin-documents__list {
+    max-height: 300px;
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .portal {
+    padding: 14px;
+  }
+
+  .admin-shell {
+    padding: 14px;
+  }
+
+  .portal-header,
+  .company-panel,
+  .portal-main,
+  .admin-header,
+  .admin-panel {
+    padding: 16px;
+  }
+
+  .admin-header__session {
+    top: 16px;
+    right: 16px;
+  }
+
+  .admin-header__main {
+    padding-right: 0;
+    padding-top: 52px;
+  }
+
+  .portal-header__right,
+  .doc-card__details,
+  .admin-summary-grid,
+  .admin-layout,
+  .admin-form-grid,
+  .checkbox-grid,
+  .admin-documents__group-items,
+  .admin-sidebar__tabs,
+  .admin-tracking-toolbar,
+  .admin-tracking-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .company-facts {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .admin-tracking-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-panel__header,
+  .admin-overview__card-footer,
+  .admin-project-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-inline-actions {
+    width: 100%;
+  }
+
+  .admin-inline-actions > .btn,
+  .admin-form__actions > .btn,
+  .modal-footer > .btn {
+    flex: 1 1 auto;
+  }
+
+  .data-table td .admin-inline-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .admin-documents__toolbar,
+  .admin-documents__bulk,
+  .admin-documents__group-head,
+  .admin-documents__group-add {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-documents__bulk > .btn,
+  .admin-documents__group-add > .btn {
+    width: 100%;
+  }
+
+  .admin-project-ribbon {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-project-ribbon__label {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+    place-items: stretch;
+  }
+
+  .modal-panel {
+    width: 100%;
+    max-height: calc(100vh - 20px);
+  }
+
+  .modal-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .modal-panel--document-review .modal-header--document-review {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .admin-document-review__header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .admin-document-review__body--split {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-header .admin-inline-actions {
+    justify-content: flex-end;
+  }
+
+  .portal-main__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .portal-main__header .tabs {
+    width: 100%;
+  }
+
+  .admin-view-switch {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .tabs {
+    width: 100%;
+  }
+
+  .tab {
+    flex: 1 1 0;
+    padding-inline: 10px;
+  }
+
+  .upload-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+

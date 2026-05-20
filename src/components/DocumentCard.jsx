@@ -3,13 +3,17 @@ import {
   formatBytes,
   formatDateTime,
 } from "../lib/files";
-
 function displayFileName(record) {
   if (!record) return "";
   return record.fileName || record.filePath || "Fichier depose";
 }
 
 function syncStatusLabel(record) {
+  const reviewStatus = String(record?.reviewStatus || "").trim();
+  if (reviewStatus === "rejected") return "Piece refusee";
+  if (reviewStatus === "accepted") return "Piece validee";
+  if (reviewStatus === "pending" && record) return "En attente de validation";
+
   const status = String(record?.syncStatus || "").trim();
   if (status === "syncing") return "Synchronisation en cours";
   if (status === "synced") return "Synchronise";
@@ -22,18 +26,32 @@ function syncStatusLabel(record) {
   return record ? "Document disponible" : "Depot attendu";
 }
 
-function flagClassName(record, done) {
-  if (!done) return "doc-flag";
-  if (record?.syncStatus === "sync_failed") return "doc-flag doc-flag--error";
-  if (record?.syncStatus === "syncing" || record?.syncStatus === "sync_pending") {
+function flagClassName(record) {
+  if (!record) return "doc-flag";
+  const reviewStatus = String(record.reviewStatus || "pending").trim();
+  if (reviewStatus === "rejected") return "doc-flag doc-flag--error";
+  if (reviewStatus === "accepted") return "doc-flag doc-flag--done";
+  if (reviewStatus === "pending") return "doc-flag doc-flag--pending";
+  if (record.syncStatus === "sync_failed") return "doc-flag doc-flag--error";
+  if (record.syncStatus === "syncing" || record.syncStatus === "sync_pending") {
     return "doc-flag doc-flag--pending";
   }
   return "doc-flag doc-flag--done";
 }
 
+function flagLabel(record) {
+  if (!record) return "Attendu";
+  const reviewStatus = String(record.reviewStatus || "pending").trim();
+  if (reviewStatus === "rejected") return "Refusee";
+  if (reviewStatus === "accepted") return "Validee";
+  if (reviewStatus === "pending") return "En attente de validation";
+  return "Recu";
+}
+
 export default function DocumentCard({
   document,
   record,
+  rejectionNotice = null,
   busy,
   primaryDisabled,
   canDelete,
@@ -43,17 +61,20 @@ export default function DocumentCard({
   onPreview,
   index,
 }) {
+  const rejected = Boolean(rejectionNotice);
+  const displayRecord = rejected ? null : record;
+  const hasActiveDeposit = Boolean(displayRecord);
+  const canReplace = hasActiveDeposit;
   const inputId = `piece-${document.id}`;
-  const done = Boolean(record);
 
   return (
     <article
-      className={`doc-card ${done ? "doc-card--done" : ""} ${busy ? "doc-card--busy" : ""}`}
+      className={`doc-card ${hasActiveDeposit ? "doc-card--done" : ""} ${rejected ? "doc-card--rejected" : ""} ${busy ? "doc-card--busy" : ""}`}
       style={{ "--card-accent": document.accent, "--delay": `${index * 24}ms` }}
     >
       <div className="doc-card__eyebrow">
-        <span className={flagClassName(record, done)}>
-          {done ? "Recu" : "Attendu"}
+        <span className={flagClassName(displayRecord)}>
+          {rejected ? "A redeposer" : flagLabel(displayRecord)}
         </span>
         <span className="doc-card__category">{document.category || "Pieces"}</span>
       </div>
@@ -65,37 +86,47 @@ export default function DocumentCard({
         </div>
       </div>
 
+      {rejected ? (
+        <p className="doc-card__rejection-notice">
+          {rejectionNotice?.comment
+            ? `Piece refusee : ${rejectionNotice.comment}`
+            : "Piece refusee. Merci de deposer une nouvelle version."}
+        </p>
+      ) : null}
+
       <dl className="doc-card__details">
         <div>
           <dt>Formats</dt>
           <dd>{document.acceptedFormats.join(", ")}</dd>
         </div>
-        <div>
-          <dt>Statut</dt>
-          <dd>{syncStatusLabel(record)}</dd>
-        </div>
-        {done ? (
+        {!rejected ? (
+          <div>
+            <dt>Statut</dt>
+            <dd>{syncStatusLabel(displayRecord)}</dd>
+          </div>
+        ) : null}
+        {displayRecord ? (
           <>
             <div className="doc-card__details--wide">
               <dt>Fichier</dt>
-              <dd>{displayFileName(record)}</dd>
+              <dd>{displayFileName(displayRecord)}</dd>
             </div>
-            {record.modifiedAt ? (
+            {displayRecord.modifiedAt ? (
               <div>
                 <dt>Mis a jour</dt>
-                <dd>{formatDateTime(record.modifiedAt)}</dd>
+                <dd>{formatDateTime(displayRecord.modifiedAt)}</dd>
               </div>
             ) : null}
-            {record.sizeBytes ? (
+            {displayRecord.sizeBytes ? (
               <div>
                 <dt>Taille</dt>
-                <dd>{formatBytes(record.sizeBytes)}</dd>
+                <dd>{formatBytes(displayRecord.sizeBytes)}</dd>
               </div>
             ) : null}
-            {record.syncError ? (
+            {displayRecord.syncError ? (
               <div className="doc-card__details--wide">
                 <dt>Erreur</dt>
-                <dd>{record.syncError}</dd>
+                <dd>{displayRecord.syncError}</dd>
               </div>
             ) : null}
           </>
@@ -104,10 +135,10 @@ export default function DocumentCard({
 
       <div className="doc-card__actions">
         <label
-          className={`btn ${done ? "btn--ghost" : "btn--primary"} ${primaryDisabled ? "btn--disabled" : ""}`}
+          className={`btn ${canReplace ? "btn--ghost" : "btn--primary"} ${primaryDisabled ? "btn--disabled" : ""}`}
           htmlFor={inputId}
         >
-          {busy ? "Traitement..." : done ? "Remplacer" : "Deposer"}
+          {busy ? "Traitement..." : canReplace ? "Remplacer" : rejected ? "Re-deposer" : "Deposer"}
         </label>
         <input
           id={inputId}

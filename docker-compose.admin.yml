@@ -1,0 +1,54 @@
+# Admin instance (internal network). Requires PostgreSQL reachable via DATABASE_URL.
+services:
+  portail-admin:
+    build:
+      context: .
+      target: admin
+      args:
+        VITE_BUILD_MODE: admin
+      secrets:
+        - vite_build_env
+    image: portail-admin-dev:latest
+    container_name: portail-admin-dev
+    restart: unless-stopped
+    ports:
+      - "3003:3002"
+    environment:
+      NODE_ENV: production
+      PORT: "3002"
+      PORTAL_APP_ROLE: admin
+      DATABASE_URL: postgresql://portail:portail@postgres:5432/portail
+      TRUST_PROXY: "1"
+      PORTAL_ADMIN_ALLOWED_IPS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
+      CLIENT_PORTAL_PUBLIC_URL: "http://localhost:3002/depot"
+    env_file:
+      - path: .env.production
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: portail-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: portail
+      POSTGRES_PASSWORD: portail
+      POSTGRES_DB: portail
+    ports:
+      - "5432:5432"
+    volumes:
+      - portail_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portail -d portail"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  vite_build_env:
+    file: .env.vite.build
+
+volumes:
+  portail_pg_data:

@@ -1,0 +1,75 @@
+:root {
+  color-scheme: light;
+  --bg: #eee7dd;
+  --bg-strong: #ded4c8;
+  --surface: #f8f3ec;
+  --surface-strong: #fffdf8;
+  --ink: #241f1a;
+  --muted: #6f6256;
+  --line: #d9cabb;
+  --line-strong: #a99786;
+  --accent: #856049;
+  --accent-strong: #342820;
+  --accent-soft: #f0e6dc;
+  --success: #53677a;
+  --success-soft: #e8edf1;
+  --warning: #8d5a1b;
+  --warning-soft: #f7ead7;
+  --danger: #962d2d;
+  --danger-soft: #f7e6e2;
+  --radius-sm: 0;
+  --radius: 0;
+  font-family: "Aptos", "Segoe UI", Tahoma, Arial, sans-serif;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    linear-gradient(180deg, rgba(52, 40, 32, 0.06), rgba(52, 40, 32, 0)),
+    linear-gradient(135deg, var(--bg), #fbf7f0);
+  color: var(--ink);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  border-radius: var(--radius-sm);
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+

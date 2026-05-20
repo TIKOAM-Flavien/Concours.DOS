@@ -21,6 +21,7 @@ function isFetchNetworkFailure(err) {
 }
 
 function rethrowFetchNetworkFailure(label, err) {
+  if (err?.name === "AbortError") throw err;
   if (!isFetchNetworkFailure(err)) throw err;
   throw new Error(
     `${label}: impossible de joindre le serveur (pas de reponse HTTP). En local, lancez \`npm run dev\` pour demarrer l'API (port 3001) et Vite, puis ouvrez l'app via l'URL affichee par Vite (le proxy /api). Verifiez aussi VPN / pare-feu et que vous n'ouvrez pas les fichiers build en file://.`
@@ -130,19 +131,26 @@ async function requestMultipart(label, path, formData, options = {}) {
 }
 
 function buildSignedLinkPayload(context) {
-  return {
-    ctx: context.link?.rawCtx,
+  const payload = {
+    inv: context.link?.inv,
     sig: context.link?.sig,
     alg: context.link?.alg,
   };
+  if (context.link?.source) {
+    payload.source = context.link.source;
+  }
+  return payload;
 }
 
 function buildSignedLinkFormData(context) {
   const formData = new FormData();
   const signed = buildSignedLinkPayload(context);
-  formData.append("ctx", signed.ctx || "");
+  formData.append("inv", signed.inv || "");
   formData.append("sig", signed.sig || "");
   formData.append("alg", signed.alg || "HS256");
+  if (signed.source) {
+    formData.append("source", signed.source);
+  }
   return formData;
 }
 
@@ -205,7 +213,7 @@ export function createPowerAutomateClient() {
     },
 
     async listDocuments(context, options) {
-      const isPortalRequest = Boolean(context.link?.rawCtx);
+      const isPortalRequest = Boolean(context.link?.inv);
       const path = isPortalRequest ? "/api/portal/documents" : "/api/admin/documents";
       const payload = isPortalRequest
         ? buildSignedLinkPayload(context)

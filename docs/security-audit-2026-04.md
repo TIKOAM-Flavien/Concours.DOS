@@ -1,7 +1,9 @@
 # Audit de sécurité — avril 2026
 
 Date : 2026-04-22
-Portée : serveur Node/Express, client React/Vite, intégrations Power Automate, base SQLite admin, documentation ops.
+Périmètre : serveur Node/Express, client React/Vite, intégrations Power Automate (e-mails), base PostgreSQL, documentation ops.
+
+> **Note** : cet audit date d'avril 2026, avant la migration PostgreSQL et le stockage local VPS. Certaines références à l'ancien modèle distant sont historiques.
 
 Ce document consolide les trois passes successives de l'audit :
 
@@ -18,11 +20,11 @@ ne sont pas versionnés (dossier `debug/` exclu par `.gitignore`).
 
 | Catégorie | Total | Résolu | Différé (action opérateur) | Différé (refactor majeur) |
 |---|---|---|---|---|
-| Sécurité (S) | 8 | 6 | 2 (S-02, S-03) | 0 |
+| Sécurité (S) | 8 | 7 | 2 (S-02, S-03) | 0 |
 | Bugs (B) | 5 | 5 | 0 | 0 |
 | Performance (P) | 5 | 3 | 0 | 2 (P-01, P-02) |
 | Hygiène / docs (N) | 9 | 9 | 0 | 0 |
-| **Total** | **27** | **23** | **2** | **2** |
+| **Total** | **27** | **24** | **2** | **2** |
 
 **Posture globale** : production-ready sous réserve des deux actions opérateur
 (S-02 rotation secrets, S-03 sortie du repo de OneDrive). Le reste est adressable
@@ -40,7 +42,7 @@ progressivement sans bloquer la mise en service.
 | S-02 | Secrets présents dans `.env` versionné | **Différé (opérateur)** | Action : rotation `PORTAL_LINK_SECRET` + URLs Power Automate, exclusion du fichier. Pas de code à changer. |
 | S-03 | Projet hébergé dans OneDrive (verrouillage fichiers, fuite) | **Différé (opérateur)** | Action : `git clone` hors de OneDrive pour le déploiement. |
 | S-04 | Pas de confirmation typée pour les actions destructives admin | **Résolu** | `src/app/AdminApp.jsx`, `confirmByTyping`. |
-| S-05 | Payload d'invitation lisible côté client (base64) | **Différé (architecture)** | Refactor : persister côté serveur, signer un ID opaque. Non bloquant car HMAC tient + revoke list. |
+| S-05 | Payload d'invitation lisible côté client (base64) | **Résolu** | Invitations persistées (`signed_invitations`), liens `?inv=<uuid>&sig=…` ; contexte métier via `/api/portal/verify` uniquement. **Coupure** : régénérer les liens `?ctx=` existants. |
 | S-06 | Pas de rate-limit sur `/api/portal` | **Résolu** | `express-rate-limit`, bucket général + bucket upload séparé (N-06), budget quotidien par `submissionId`. |
 | S-07 | Pas de révocation serveur pour les liens signés | **Résolu** | Table `revoked_invitations`, endpoint `/api/admin/invitations/revoke` + N-03 (accepte les liens expirés mais valides). |
 | S-08 | IP admin non vérifiée strictement | **Résolu** | `requireLocalAdmin` s'appuie uniquement sur `req.socket.remoteAddress`. |
@@ -53,7 +55,7 @@ progressivement sans bloquer la mise en service.
 | B-02 | Preview non révoquée → fuite mémoire | **Résolu** | `src/app/App.jsx`, `previewRequestIdRef` + `URL.revokeObjectURL`. |
 | B-03 | `base64ToBytes` crash sur entrée corrompue | **Résolu** | `src/lib/powerAutomateClient.js`, `try/catch` avec message clair. |
 | B-04 | `/api/admin/projects` lançait sur DB vide | **Résolu** | Garde sur absence de projets/companies. |
-| B-05 | Normalisation folderPath divergeait client/serveur | **Résolu** | Module partagé `shared/sharepointPath.js`, réutilisé par `server/security.js` et `src/config/env.js`. |
+| B-05 | Normalisation folderPath divergeait client/serveur | **Résolu** | Module partagé `shared/folderPath.js`, réutilisé par `server/security.js` et `src/config/env.js`. |
 
 ### Performance
 
@@ -93,7 +95,7 @@ L'instrumentation et les scripts de repro ne sont pas versionnés.
   - Post-fix : 1 seul `GET_DOCUMENTS`, budget décrémenté uniquement après `callFlow` OK, bucket upload isolé.
 - **Round 2** (N-03, N-07, N-08, N-09, B-05)
   - Scénario : génération d'un lien avec `exp` passé + révocation + cleanup manuel.
-  - Post-fix : revoke OK avec `expired: true`, `pruneRevokedInvitations` et `scrubOldAuditPayloads` exécutent les requêtes SQL attendues, client et serveur produisent le même `folderPath` pour une URL SharePoint encodée.
+  - Post-fix : revoke OK avec `expired: true`, `pruneRevokedInvitations` et `scrubOldAuditPayloads` exécutent les requêtes SQL attendues, client et serveur produisent le même `folderPath` pour une URL encodée.
 
 ---
 
@@ -113,7 +115,7 @@ src/app/AdminApp.jsx           |  51 +-
 src/app/App.jsx                |  26 +-
 src/config/env.js              |  21 +-
 src/lib/powerAutomateClient.js | 112 +-
-shared/sharepointPath.js       | (nouveau, 54 lignes)
+shared/folderPath.js       | (nouveau, 54 lignes)
 docs/security-audit-2026-04.md | (ce document)
 ```
 

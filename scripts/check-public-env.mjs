@@ -3,11 +3,8 @@ import { resolve } from "node:path";
 
 const FORBIDDEN_PUBLIC_KEYS = [
   "VITE_CLIENT_PORTAL_LINK_SECRET",
-  "VITE_POWER_AUTOMATE_GET_DOCUMENTS_URL",
-  "VITE_POWER_AUTOMATE_DOWNLOAD_FILE_URL",
-  "VITE_POWER_AUTOMATE_UPLOAD_FILE_URL",
-  "VITE_POWER_AUTOMATE_UPDATE_FILE_URL",
-  "VITE_POWER_AUTOMATE_DELETE_FILE_URL",
+  "VITE_POWER_AUTOMATE_SEND_INVITATIONS_URL",
+  "VITE_POWER_AUTOMATE_SEND_REMINDERS_URL",
 ];
 
 function parseEnvFile(path) {
@@ -56,11 +53,8 @@ function main() {
   console.error("");
   console.error("Expected server-only names:");
   console.error("- PORTAL_LINK_SECRET");
-  console.error("- POWER_AUTOMATE_GET_DOCUMENTS_URL");
-  console.error("- POWER_AUTOMATE_DOWNLOAD_FILE_URL");
-  console.error("- POWER_AUTOMATE_UPLOAD_FILE_URL");
-  console.error("- POWER_AUTOMATE_UPDATE_FILE_URL");
-  console.error("- POWER_AUTOMATE_DELETE_FILE_URL");
+  console.error("- POWER_AUTOMATE_SEND_INVITATIONS_URL");
+  console.error("- POWER_AUTOMATE_SEND_REMINDERS_URL");
   process.exit(1);
 }
 

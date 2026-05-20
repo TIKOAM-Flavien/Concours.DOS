@@ -32,35 +32,35 @@ Ce document décrit le déploiement, l'exploitation et la conformité du
 
 ## 1. Périmètre et architecture cible
 
-L'application expose **deux interfaces distinctes** servies par un seul
-processus Node.js :
+Deux interfaces métier, déployables sur **un** processus (`PORTAL_APP_ROLE=all`,
+transition) ou **deux** VMs (`admin` interne + `portal` DMZ). L'état partagé
+(projets, révocations, documents) est dans **PostgreSQL** ; le staging fichiers
+(`PORTAL_UPLOAD_STAGING_DIR`) ne tourne que sur l'instance **portal** (depots synchrones).
 
 
-| Chemin                       | Public cible                        | Contrôle d'accès                                               |
-| ---------------------------- | ----------------------------------- | -------------------------------------------------------------- |
-| `GET /depot?ctx=&sig=&alg=`  | Entreprises invitées (Internet)     | Lien signé HMAC-SHA256 obligatoire                             |
-| `GET /admin`                 | Administrateur (sur l'hôte serveur) | Restreint à `127.0.0.1` / `::1` par `req.socket.remoteAddress` |
-| `GET /health`, `GET /readyz` | Supervision interne                 | Sans authentification (réponse non sensible)                   |
-| `POST /api/portal/`*         | Portail entreprise (XHR)            | Signature obligatoire + budget journalier + rate-limit         |
-| `POST /api/admin/*`          | Console admin (XHR)                 | `requireLocalAdmin`                                            |
+| Chemin | Instance | Public | Contrôle |
+| ------ | -------- | ------ | -------- |
+| `GET /depot?inv=&sig=&alg=` | portal | Entreprises (Internet) | Lien signé HMAC-SHA256 (ID opaque en base) |
+| `GET /admin` | admin | Administrateurs (réseau interne) | `requireLocalAdmin` (+ Entra ID au proxy, roadmap) |
+| `GET /health`, `GET /readyz` | les deux | Supervision | Non sensible ; `readyz` différencié par rôle |
+| `POST /api/portal/*` | portal | Portail XHR | Signature + budget + rate-limit |
+| `POST /api/admin/*` | admin | Console XHR | `requireLocalAdmin` |
 
 
 ```text
-Internet
-  └─► Reverse Proxy TLS (IIS / Nginx / F5 / ARR)
-        │   - TLS terminaison
-        │   - HSTS (relais)
-        │   - ACL : /admin* refusé
-        │   - en-têtes X-Forwarded-* signés
-        └─► Node.js (Express 5) sur loopback (127.0.0.1:3001)
-              ├─► SQLite local (admin.db, journal WAL)
-              └─► Power Automate (5 webhooks HTTPS)
-                    └─► SharePoint Online
+Internet ──► Proxy TLS externe ──► Node (PORTAL_APP_ROLE=portal)
+                                      ├─► staging /data/uploads (depots synchrones)
+                                      └─► PostgreSQL (réseau privé :5432)
+
+Admins ──► Proxy interne (+ Entra ID) ──► Node (PORTAL_APP_ROLE=admin)
+                                            └─► PostgreSQL
+
+Les deux ──► Power Automate (HTTPS) ──► envoi d'e-mails (invitations, relances)
 ```
 
-Aucune base de données externe, aucun cache distribué, aucun broker. Le
-processus est **stateful** uniquement vis-à-vis du fichier SQLite et de la
-mémoire du rate-limiter en-process (voir §11 pour le multi-instance).
+Pas d'API inter-serveurs : cohérence par PostgreSQL et `PORTAL_LINK_SECRET`
+identique sur admin et portal. Voir `docker-compose.admin.yml` et
+`docker-compose.portal.yml` pour des exemples Compose.
 
 ---
 
@@ -78,17 +78,19 @@ mémoire du rate-limiter en-process (voir §11 pour le multi-instance).
 | Filesystem    | Local NTFS ou ext4                                                | **Ne pas** stocker la base sur un partage WebDAV / OneDrive (lock + sync conflict) |
 | RAM           | 512 Mo minimum, 1 Go recommandé                                   | Pic upload : 4–6× la taille max d'un fichier                                       |
 | CPU           | 1 vCPU minimum, 2 vCPU recommandé                                 | Charge CPU ≈ négligeable hors handshake TLS                                        |
-| Disque        | 1 Go minimum + croissance SQLite                                  | Provisionner 2× la taille estimée pour les `*-wal`                                 |
+| PostgreSQL    | 14+ (16 recommandé)                                               | Base partagée admin + portal ; sauvegardes DSI                                     |
+| Disque        | 1 Go minimum + staging portal                                     | Volume upload sur l'instance portal uniquement                                     |
 
 
 ### 2.2 Comptes et droits
 
 - **Compte de service dédié** sans droits interactifs (`svc-portail` ou
 équivalent).
-- Droits NTFS / POSIX : lecture/exécution sur le code, **lecture/écriture
-exclusive** sur le dossier `PORTAL_ADMIN_DB_PATH`.
-- Pas d'accès aux partages SharePoint depuis le serveur : tous les échanges
-passent par les flows Power Automate.
+- Droits NTFS / POSIX : lecture/exécution sur le code ; sur l'instance **portal**,
+lecture/écriture sur `PORTAL_UPLOAD_STAGING_DIR`. Accès PostgreSQL via
+`DATABASE_URL` (compte dédié, moindre privilège).
+- Les fichiers sont stockés localement sur l'instance portal (`PORTAL_UPLOAD_STAGING_DIR`).
+  Power Automate n'est utilisé que pour l'envoi d'e-mails.
 
 ### 2.3 Ouvertures réseau
 
@@ -127,8 +129,8 @@ au socket loopback (`127.0.0.1` / `::1`). Le contrôle d'accès admin est donc
 | F1  | Navigateur entreprise | Reverse proxy:443    | Page `/depot` + assets                              | HTML, JS, CSS           |
 | F2  | Navigateur entreprise | Reverse proxy:443    | `/api/portal/`* (signé)                             | JSON + base64 (upload)  |
 | F3  | Reverse proxy         | Node:3001            | F1+F2 relayés                                       | id.                     |
-| F4  | Node                  | Power Automate:443   | GET_DOCUMENTS / UPLOAD / UPDATE / DELETE / DOWNLOAD | JSON + base64 (fichier) |
-| F5  | Power Automate        | SharePoint           | Stockage et lecture documentaire                    | Fichiers + métadonnées  |
+| F4  | Node (portal)         | Disque local         | Upload / download / update / delete synchrones        | Fichiers sur staging      |
+| F5  | Node (portal + admin) | Power Automate:443   | Envoi invitations et relances                         | JSON (e-mail)             |
 | F6  | Hôte admin            | Node:3001 (loopback) | `/admin` + `/api/admin/*`                           | JSON                    |
 | F7  | Supervision           | Node:3001            | `/health`, `/readyz`                                | JSON                    |
 
@@ -147,13 +149,13 @@ au socket loopback (`127.0.0.1` / `::1`). Le contrôle d'accès admin est donc
 └──────────────────────────┬─────────────────────────────────┘
                            │ Loopback / VLAN privé
 ┌─ Zone Backend ───────────┴─────────────────────────────────┐
-│   Node.js (Express) — port 3001                            │
-│   - SQLite local (admin.db, WAL)                           │
-│   - Loggage stdout                                         │
+│   Node.js (Express) — port 3002                            │
+│   PostgreSQL (zone données) + staging local (portal)       │
+│   Loggage stdout                                           │
 └──────────────────────────┬─────────────────────────────────┘
-                           │ HTTPS sortant
+                           │ HTTPS sortant (e-mails)
 ┌─ Zone SaaS Microsoft ────┴─────────────────────────────────┐
-│   Power Automate ─► SharePoint Online (BDD_reception_piece)│
+│   Power Automate (invitations + relances)                  │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -163,7 +165,7 @@ au socket loopback (`127.0.0.1` / `::1`). Le contrôle d'accès admin est donc
 | Donnée                                                    | Catégorie               | Stockage                                                     |
 | --------------------------------------------------------- | ----------------------- | ------------------------------------------------------------ |
 | `companyName`, `companyId`, `contactName`, `companyEmail` | Données pro / contact   | SQLite `companies`, payload signé                            |
-| Pièces administratives (KBIS, URSSAF, RIB, etc.)          | Documents pro           | SharePoint via Power Automate. **Aucune persistance locale** |
+| Pièces administratives (KBIS, URSSAF, RIB, etc.)          | Documents pro           | Staging local portal (`PORTAL_UPLOAD_STAGING_DIR`) + PostgreSQL |
 | Adresse IP appelante                                      | Métadonnée              | `audit_log.actorIp`, rétention 90j                           |
 | `submissionId` (jeton applicatif)                         | Identifiant fonctionnel | SQLite + payload signé                                       |
 
@@ -230,7 +232,7 @@ Le serveur **refuse** de démarrer si :
 - le build est absent ;
 - `PORTAL_LINK_SECRET` est absent, faible (<32 octets) ou contient un mot
 interdit (`replace`, `change`, `secret`, etc.) ;
-- l'un des flows critiques (GET / UPLOAD / UPDATE / DELETE) est manquant ;
+- l'un des flows mail est manquant alors que l'envoi e-mail est requis ;
 - une variable `VITE_`* interdite est définie.
 
 Vérifier `GET http://127.0.0.1:3001/readyz` → `200 OK`.
@@ -246,10 +248,8 @@ Vérifier `GET http://127.0.0.1:3001/readyz` → `200 OK`.
 | ---------------------------------- | --------- | ----------------------------------------------------------------- |
 | `PORTAL_LINK_SECRET`               | secret    | Clé HMAC ≥32 octets. Source de confiance unique des liens signés. |
 | `CLIENT_PORTAL_PUBLIC_URL`         | URL HTTPS | URL publique du portail (utilisée pour générer les liens).        |
-| `POWER_AUTOMATE_GET_DOCUMENTS_URL` | URL HTTPS | Flow lecture documentaire SharePoint.                             |
-| `POWER_AUTOMATE_UPLOAD_FILE_URL`   | URL HTTPS | Flow dépôt.                                                       |
-| `POWER_AUTOMATE_UPDATE_FILE_URL`   | URL HTTPS | Flow remplacement.                                                |
-| `POWER_AUTOMATE_DELETE_FILE_URL`   | URL HTTPS | Flow suppression.                                                 |
+| `DATABASE_URL`                     | URL       | Connexion PostgreSQL partagée admin + portal.                     |
+| `PORTAL_UPLOAD_STAGING_DIR`        | chemin    | Répertoire de staging des fichiers (instance portal).             |
 
 
 ### 5.2 Recommandées
@@ -257,18 +257,18 @@ Vérifier `GET http://127.0.0.1:3001/readyz` → `200 OK`.
 
 | Variable                              | Défaut            | Description                                                                |
 | ------------------------------------- | ----------------- | -------------------------------------------------------------------------- |
-| `POWER_AUTOMATE_DOWNLOAD_FILE_URL`    | *vide*            | Flow téléchargement (preview / download). Si absent, preview désactivé.    |
+| `DATABASE_URL`                        | *obligatoire*     | Connexion PostgreSQL partagée admin + portal.                              |
+| `PORTAL_UPLOAD_STAGING_DIR`           | `/data/uploads`   | Staging fichiers (instance portal uniquement).                             |
 | `POWER_AUTOMATE_SEND_INVITATIONS_URL` | *vide*            | Envoi des invitations par email.                                           |
 | `POWER_AUTOMATE_SEND_REMINDERS_URL`   | *vide*            | Envoi des relances.                                                        |
 | `PORTAL_LINK_TTL_MINUTES`             | 43200 (30j)       | Durée de vie par défaut des liens signés.                                  |
 | `PORTAL_LINK_TTL_MAX_MINUTES`         | 525600 (1 an)     | Plafond serveur appliqué à toute demande de signature.                     |
-| `PORTAL_ADMIN_DB_PATH`                | `server/admin.db` | Chemin du fichier SQLite. **Doit être hors du repo et hors OneDrive.**     |
 | `PORTAL_MAX_FILE_MB`                  | 20                | Taille max d'un fichier uploadé.                                           |
 | `PORTAL_MAX_BODY_MB`                  | 30                | Limite globale corps de requête (calculée avec marge base64).              |
 | `PORTAL_RATE_LIMIT_PER_MINUTE`        | 60                | Rate-limit général sur `/api/portal/`*.                                    |
 | `PORTAL_UPLOAD_RATE_LIMIT_PER_MINUTE` | 10                | Rate-limit dédié `/api/portal/upload`.                                     |
-| `PORTAL_SUBMISSION_DAILY_BUDGET`      | 300               | Quota journalier par `submissionId` (SQLite).                              |
-| `PORTAL_FLOW_TIMEOUT_MS`              | 120000            | Timeout HTTP des appels Power Automate.                                    |
+| `PORTAL_SUBMISSION_DAILY_BUDGET`      | 300               | Quota journalier par `submissionId` (PostgreSQL).                          |
+| `PORTAL_FLOW_TIMEOUT_MS`              | 120000            | Timeout HTTP des appels Power Automate (e-mails).                          |
 | `TRUST_PROXY`                         | *vide*            | `loopback`, `uniquelocal`, IP/CIDR séparés par virgule, ou entier (sauts). |
 
 
@@ -290,11 +290,8 @@ Vérifier `GET http://127.0.0.1:3001/readyz` → `200 OK`.
 
 ```text
 VITE_CLIENT_PORTAL_LINK_SECRET
-VITE_POWER_AUTOMATE_GET_DOCUMENTS_URL
-VITE_POWER_AUTOMATE_DOWNLOAD_FILE_URL
-VITE_POWER_AUTOMATE_UPLOAD_FILE_URL
-VITE_POWER_AUTOMATE_UPDATE_FILE_URL
-VITE_POWER_AUTOMATE_DELETE_FILE_URL
+VITE_POWER_AUTOMATE_SEND_INVITATIONS_URL
+VITE_POWER_AUTOMATE_SEND_REMINDERS_URL
 ```
 
 `scripts/check-public-env.mjs` bloque le build et le serveur quitte au
@@ -510,38 +507,32 @@ Si NSSM est interdit par la DSI, utiliser le Planificateur de tâches :
 
 | Élément                         | Localisation               | Sensibilité                          | Stratégie                                  |
 | ------------------------------- | -------------------------- | ------------------------------------ | ------------------------------------------ |
-| `admin.db` (+ `*-wal`, `*-shm`) | `PORTAL_ADMIN_DB_PATH`     | Métier (projets, entreprises, audit) | Sauvegarde quotidienne                     |
+| PostgreSQL (`DATABASE_URL`)     | VM / service managé        | Métier (projets, entreprises, audit) | `pg_dump` quotidien + PITR si disponible   |
+| Staging fichiers (portal)       | `PORTAL_UPLOAD_STAGING_DIR`| Documents déposés                    | Snapshot volume / rsync quotidien          |
 | `.env` (production)             | `/etc/portail-entreprise/` | **Secret**                           | Coffre-fort DSI (Vault / KeePass partagé)  |
 | Code source                     | `/opt/portail-entreprise`  | Public interne                       | Repo Git, pas besoin de backup additionnel |
-| Documents SharePoint            | SharePoint Online          | Métier                               | Hors périmètre — politique SharePoint      |
 
 
-### 8.2 Procédure SQLite
-
-SQLite avec WAL active : utiliser **toujours** le mode online backup pour
-éviter une copie incohérente :
+### 8.2 Procédure PostgreSQL
 
 ```bash
-# Linux
-sqlite3 /var/lib/portail-entreprise/admin.db ".backup '/var/backups/portail/admin-$(date +%F).db'"
+# Linux — dump custom compressé
+pg_dump "$DATABASE_URL" -Fc -f "/var/backups/portail/portail-$(date +%F).dump"
 ```
 
 ```powershell
-# Windows
-sqlite3.exe "C:\var\portail\admin.db" ".backup 'D:\backup\portail\admin-$(Get-Date -Format yyyy-MM-dd).db'"
+# Windows (pg_dump dans PATH)
+$date = Get-Date -Format yyyy-MM-dd
+pg_dump $env:DATABASE_URL -Fc -f "D:\backup\portail\portail-$date.dump"
 ```
-
-Ne **jamais** copier `admin.db` directement avec `cp` / `Copy-Item` pendant
-qu'il est ouvert : le `*-wal` n'est pas appliqué et la sauvegarde peut être
-corrompue.
 
 ### 8.3 Restauration
 
-1. Arrêter le service.
-2. Restaurer le fichier `.db` au chemin `PORTAL_ADMIN_DB_PATH`.
-3. Supprimer tout `*-wal` / `*-shm` résiduel.
-4. Démarrer le service.
-5. Vérifier `GET /readyz`.
+1. Arrêter les services admin et portal.
+2. Restaurer la base : `pg_restore -d portail portail-YYYY-MM-DD.dump` (adapter selon politique DSI).
+3. Restaurer le volume staging portal si nécessaire.
+4. Démarrer les services.
+5. Vérifier `GET /readyz` sur chaque instance.
 
 ### 8.4 Fréquence recommandée
 
@@ -666,22 +657,20 @@ existant et par `scripts/check-public-env.mjs`).
 | Scénario                           | RTO cible        | RPO cible | Action                                                              |
 | ---------------------------------- | ---------------- | --------- | ------------------------------------------------------------------- |
 | Crash process                      | < 1 min          | 0         | `Restart=on-failure` (systemd) / NSSM auto-restart                  |
-| Corruption `admin.db`              | < 30 min         | 24 h      | Restaurer dernier backup (§8.3)                                     |
-| Perte de l'hôte                    | < 4 h            | 24 h      | Réinstaller selon §4, restaurer `admin.db`                          |
-| Power Automate indisponible        | dépend Microsoft | 0         | Bandeau dans l'admin : `syncError`. Les uploads échouent avec `503` |
+| Corruption PostgreSQL              | < 30 min         | 24 h      | Restaurer dernier `pg_dump` (§8.3)                                  |
+| Perte de l'hôte portal             | < 4 h            | 24 h      | Réinstaller, restaurer PostgreSQL + volume staging                  |
+| Power Automate indisponible        | dépend Microsoft | 0         | Les envois d'e-mails échouent ; les dépôts locaux restent possibles |
 | Compromission `PORTAL_LINK_SECRET` | < 30 min         | 0         | Rotation (§10.2) + revoke en masse                                  |
 
 
 ### 11.2 Multi-instance / haute dispo
 
-Le portail est **mono-instance par défaut** (rate-limiter en mémoire, SQLite
-local). Pour passer en multi-instance :
+Le portail cible **deux instances** (admin + portal) avec PostgreSQL partagé.
+Limitations restantes pour scale-out portal :
 
 1. Externaliser le rate-limit (`@express-rate-limit/redis-store` ou similaire).
-2. Externaliser SQLite vers une base partagée (PostgreSQL, MS SQL) : impose
-  un refactor de `server/db.js`.
-3. Sticky-session non requis (toutes les routes API sont stateless une fois
-  le payload signé reçu).
+2. Staging fichiers local sur une seule instance portal (ou stockage partagé).
+3. Sticky-session non requis (routes API stateless une fois l'invitation signée reçue).
 4. Aligner les horloges (NTP) — l'exp / iat doivent être cohérents.
 
 Voir `[docs/operations-guide.md](operations-guide.md#limitation-du-débit-rate-limit)`
@@ -692,7 +681,7 @@ pour les limitations connues du `MemoryStore`.
 Si un PRA inter-site est requis :
 
 - Synchroniser `.env` via le coffre-fort centralisé.
-- Répliquer `admin.db` toutes les 15 min (rsync + `.backup`) vers le site B.
+- Répliquer PostgreSQL et le volume staging portal vers le site B.
 - Mettre à jour le DNS portail (TTL court : 300s recommandé).
 - Tester la bascule semestriellement.
 
@@ -710,9 +699,8 @@ nécessaires au dépôt documentaire.
 
 Voir §3.3. Aucune donnée sensible au sens RGPD article 9 n'est attendue.
 Si une pièce déposée contient incidemment de telles données (ex. RIB
-contenant l'IBAN, certificats médicaux), s'appuyer sur la politique
-SharePoint du tenant Microsoft 365 (chiffrement au repos, contrôle d'accès,
-DLP).
+contenant l'IBAN, certificats médicaux), s'appuyer sur la politique de
+rétention et de chiffrement du disque / backup DSI.
 
 ### 12.3 Rétention par défaut
 
@@ -721,10 +709,11 @@ DLP).
 | ------------------------------------------------ | ---------- | -------------------------- | ---------------------------------------------------------- |
 | `audit_log.payload`                              | SQLite     | **90 jours**               | `scrubOldAuditPayloads` (auto + endpoint manuel)           |
 | `audit_log.payloadHash` + `action` + `createdAt` | SQLite     | À durée de vie applicative | Conservé (intégrité)                                       |
-| `revoked_invitations`                            | SQLite     | **30 jours après `exp`**   | `pruneRevokedInvitations`                                  |
+| `revoked_invitations`                            | PostgreSQL | **30 jours après `exp`**   | `pruneRevokedInvitations`                                  |
+| `signed_invitations`                             | PostgreSQL | **30 jours après `exp`**   | `pruneExpiredSignedInvitations` ; statuts `generated` / `sent` / `expired` / `reissued` |
 | `submission_daily_budget`                        | SQLite     | Indéfini, faible volume    | Purge manuelle si besoin                                   |
 | `projects`, `companies`                          | SQLite     | Cycle de vie projet        | Archivage logique (`archivedAt`) puis suppression manuelle |
-| Documents                                        | SharePoint | Politique tenant           | Hors périmètre app                                         |
+| Documents                                        | Staging local portal | `PORTAL_UPLOAD_RETENTION_DAYS` + purge manuelle | Fichiers sur disque + métadonnées PostgreSQL               |
 
 
 Une purge manuelle d'un projet/entreprise déclenche `audit.project.delete` /
@@ -811,7 +800,7 @@ Cocher avant ouverture aux entreprises.
 - Création d'un projet pilote via `/admin`.
 - Ajout d'une entreprise pilote, pièces attendues définies.
 - Génération d'un lien signé ; le lien ouvre bien le portail.
-- Upload d'un PDF de test ; le fichier apparaît dans SharePoint.
+- Upload d'un PDF de test ; le fichier est visible dans le suivi admin et téléchargeable.
 - Remplacement (update) du même PDF.
 - Suppression du PDF.
 - Si flow DOWNLOAD configuré : prévisualisation OK.

@@ -1,0 +1,56 @@
+# Portal instance (DMZ / public). Shares PostgreSQL with admin; mounts upload staging.
+services:
+  portail-portal:
+    build:
+      context: .
+      target: portal
+      args:
+        VITE_BUILD_MODE: portal
+      secrets:
+        - vite_build_env
+    image: portail-portal-dev:latest
+    container_name: portail-portal-dev
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: production
+      PORT: "3002"
+      PORTAL_APP_ROLE: portal
+      DATABASE_URL: postgresql://portail:portail@postgres:5432/portail
+      TRUST_PROXY: "1"
+      PORTAL_UPLOAD_STAGING_DIR: /data/uploads
+    env_file:
+      - path: .env.production
+        required: false
+    volumes:
+      - portail_uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: portail-postgres-portal-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: portail
+      POSTGRES_PASSWORD: portail
+      POSTGRES_DB: portail
+    ports:
+      - "5433:5432"
+    volumes:
+      - portail_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portail -d portail"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  vite_build_env:
+    file: .env.vite.build
+
+volumes:
+  portail_uploads:
+  portail_pg_data:

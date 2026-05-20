@@ -1,5 +1,6 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import AppVersion from "../components/AppVersion";
 import DocumentCard from "../components/DocumentCard";
 import FilePreviewModal from "../components/FilePreviewModal";
 import StatusBanner from "../components/StatusBanner";
@@ -11,12 +12,12 @@ import {
   formatDateTime,
   isPreviewableFileName,
 } from "../lib/files";
-import { resolveLinkContext } from "../lib/linkContext";
+import { applyVerifiedInvitation, resolveLinkContext } from "../lib/linkContext";
 import { createPowerAutomateClient } from "../lib/powerAutomateClient";
 import {
   buildDocumentState,
-  normalizeSharePointRecords,
-} from "../lib/sharePointDocuments";
+  normalizeDocumentRecords,
+} from "../lib/documentRecords";
 
 function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
@@ -175,32 +176,11 @@ function accessFailureFromServer(error) {
 }
 
 async function assessAccess(context, client) {
-  const rawCtx = context.link?.rawCtx;
+  const inv = context.link?.inv;
   const sig = context.link?.sig;
   const alg = String(context.link?.alg || "HS256").trim().toUpperCase();
-  const exp = context.link?.decoded?.exp;
-  const expDate = exp ? new Date(exp) : null;
-  const expired =
-    expDate instanceof Date &&
-    !Number.isNaN(expDate.getTime()) &&
-    Date.now() > expDate.getTime();
-  // Second time gate (matches `isInvitationDeadlinePast` on the server):
-  // deadline lives inside the signed payload, so an attacker cannot tamper
-  // with it. When `now > deadline`, the portal is closed even if `exp` is
-  // still in the future.
-  const deadlineRaw = context.link?.decoded?.deadline || context.deadline;
-  const deadlineDate = deadlineRaw ? new Date(deadlineRaw) : null;
-  const deadlinePassed =
-    deadlineDate instanceof Date &&
-    !Number.isNaN(deadlineDate.getTime()) &&
-    Date.now() > deadlineDate.getTime();
-  const missingFields = [];
 
-  if (!context.companyId) missingFields.push("identifiant entreprise");
-  if (!context.submissionId) missingFields.push("identifiant de soumission");
-  if (!context.folderPath) missingFields.push("dossier de depot");
-
-  if (!rawCtx || !sig) {
+  if (!inv || !sig) {
     return {
       status: "blocked",
       tone: "error",
@@ -221,44 +201,6 @@ async function assessAccess(context, client) {
       message:
         "Le format de signature du lien n'est pas supporte. Demandez une nouvelle invitation.",
       trustedContext: false,
-    };
-  }
-
-  let trustedContext = true;
-
-  if (expired) {
-    return {
-      status: "blocked",
-      tone: "error",
-      label: "Lien expire",
-      title: "Invitation expiree",
-      message:
-        "La validite de ce lien est depassee. Un nouveau lien signe est necessaire pour continuer.",
-      trustedContext,
-    };
-  }
-
-  if (deadlinePassed) {
-    return {
-      status: "blocked",
-      tone: "error",
-      label: "Echeance depassee",
-      title: "Date limite atteinte",
-      message:
-        "La date limite de depot est passee. Le portail n'est plus accessible pour cette invitation.",
-      trustedContext,
-    };
-  }
-
-  if (missingFields.length) {
-    return {
-      status: "blocked",
-      tone: "error",
-      label: "Invitation incomplete",
-      title: "Informations manquantes",
-      message:
-        "Le lien ne contient pas toutes les informations necessaires pour le depot. Contactez le support pour obtenir une invitation complete.",
-      trustedContext,
     };
   }
 
@@ -284,12 +226,16 @@ async function assessAccess(context, client) {
       "Le lien signe a ete controle cote serveur. Les depots sont stockes sur le VPS puis synchronises en arriere-plan.",
     trustedContext: true,
     limits: serverVerification?.limits || {},
+    invitation: serverVerification?.invitation || null,
   };
 }
 
 export default function App() {
-  const [context] = useState(() => resolveLinkContext());
+  const [context, setContext] = useState(() => resolveLinkContext());
   const [client] = useState(() => createPowerAutomateClient());
+  const contextRef = useRef(context);
+  const recordsRequestIdRef = useRef(0);
+  const recordsAbortRef = useRef(null);
   const [records, setRecords] = useState([]);
   const [pageState, setPageState] = useState("ready");
   const [pageError, setPageError] = useState("");
@@ -312,32 +258,73 @@ export default function App() {
     maxFileMb: portalEnv.maxFileMb,
   }));
 
-  async function refreshRecords(options = {}) {
+  useEffect(() => {
+    contextRef.current = context;
+  }, [context]);
+
+  const refreshRecords = useCallback(async (options = {}) => {
     const quiet = Boolean(options.quiet);
+    const activeContext = options.context || contextRef.current;
+    const requestId = recordsRequestIdRef.current + 1;
+    recordsRequestIdRef.current = requestId;
+
+    if (recordsAbortRef.current) {
+      recordsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    recordsAbortRef.current = controller;
 
     if (!quiet) setPageState("loading");
     setPageError("");
 
     try {
-      const rows = await client.listDocuments(context);
-      const normalizedRecords = normalizeSharePointRecords(rows, context);
+      const rows = await client.listDocuments(activeContext, {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || requestId !== recordsRequestIdRef.current) {
+        return;
+      }
+      const normalizedRecords = normalizeDocumentRecords(rows, activeContext);
 
       startTransition(() => {
         setRecords(normalizedRecords);
         setPageState("ready");
       });
     } catch (error) {
+      if (error?.name === "AbortError" || requestId !== recordsRequestIdRef.current) {
+        return;
+      }
       setPageState("error");
       setPageError(error.message || "Lecture du stockage local impossible.");
+    } finally {
+      if (recordsAbortRef.current === controller) {
+        recordsAbortRef.current = null;
+      }
     }
-  }
+  }, [client]);
+
+  useEffect(() => {
+    return () => {
+      if (recordsAbortRef.current) {
+        recordsAbortRef.current.abort();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
 
     async function bootstrap() {
-      const resolvedAccess = await assessAccess(context, client);
+      const initialContext = contextRef.current;
+      const resolvedAccess = await assessAccess(initialContext, client);
       if (!active) return;
+
+      const workingContext = resolvedAccess.invitation
+        ? applyVerifiedInvitation(initialContext, resolvedAccess.invitation)
+        : initialContext;
+      if (resolvedAccess.invitation) {
+        setContext(workingContext);
+      }
 
       setAccessState(resolvedAccess);
       if (resolvedAccess.limits?.maxFileMb) {
@@ -352,7 +339,7 @@ export default function App() {
         return;
       }
 
-      await refreshRecords();
+      await refreshRecords({ context: workingContext });
     }
 
     bootstrap();
@@ -360,8 +347,7 @@ export default function App() {
     return () => {
       active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [client, refreshRecords]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -369,9 +355,8 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // Poll for sync status while at least one record is non-terminal. The
-  // worker uploads to SharePoint asynchronously after the 202 ACK, so without
-  // this the badge stays "Recu localement" until the visitor reloads.
+  // Poll for sync status while at least one record is non-terminal. The worker
+  // finalise le depot sur le disque local apres le 202 ACK.
   //
   // Polling rules:
   // - paused while the tab is hidden (no point spending requests on an
@@ -439,8 +424,7 @@ export default function App() {
       if (timer) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasInFlightSync, accessState.status]);
+  }, [hasInFlightSync, accessState.status, refreshRecords]);
 
   useEffect(() => {
     return () => {
@@ -448,8 +432,18 @@ export default function App() {
     };
   }, [preview?.blobUrl]);
 
-  const documentState = buildDocumentState(context.documents, records);
-  const completedCount = documentState.filter((item) => item.latest).length;
+  const documentState = useMemo(
+    () => buildDocumentState(context.documents, records),
+    [context.documents, records]
+  );
+  const hasActiveDeposit = useCallback((item) => {
+    const record = item.latest;
+    if (!record) return false;
+    return (record.reviewStatus || "pending") !== "rejected";
+  }, []);
+  const completedCount = documentState.filter(
+    (item) => item.latest?.reviewStatus === "accepted"
+  ).length;
   const totalCount = context.documents.length;
   const remainingCount = Math.max(totalCount - completedCount, 0);
   const trustedContext = accessState.trustedContext;
@@ -460,38 +454,52 @@ export default function App() {
   );
 
   const pendingItems = useMemo(
-    () => documentState.filter((item) => !item.latest),
-    [documentState]
+    () => documentState.filter((item) => !hasActiveDeposit(item)),
+    [documentState, hasActiveDeposit]
   );
   const doneItems = useMemo(
-    () => documentState.filter((item) => item.latest),
-    [documentState]
+    () => documentState.filter((item) => hasActiveDeposit(item)),
+    [documentState, hasActiveDeposit]
   );
   const [activeTab, setActiveTab] = useState("pending");
   const [activeCategory, setActiveCategory] = useState("Toutes");
 
-  const categories = useMemo(() => {
-    const currentItems = activeTab === "pending" ? pendingItems : doneItems;
-    const catSet = new Set(
-      currentItems.map((item) => item.document.category || "Pieces")
-    );
-    return ["Toutes", ...Array.from(catSet).sort((a, b) => a.localeCompare(b))];
-  }, [activeTab, pendingItems, doneItems]);
+  const activeItems = useMemo(
+    () => (activeTab === "pending" ? pendingItems : doneItems),
+    [activeTab, pendingItems, doneItems]
+  );
+
+  const categoryOptions = useMemo(() => {
+    const countsByCategory = new Map();
+    for (const item of activeItems) {
+      const category = item.document.category || "Pieces";
+      countsByCategory.set(category, (countsByCategory.get(category) || 0) + 1);
+    }
+
+    return [
+      { label: "Toutes", count: activeItems.length },
+      ...Array.from(countsByCategory.entries())
+        .sort((left, right) => left[0].localeCompare(right[0]))
+        .map(([label, count]) => ({ label, count })),
+    ];
+  }, [activeItems]);
 
   const visibleItems = useMemo(() => {
-    const currentItems = activeTab === "pending" ? pendingItems : doneItems;
-    if (activeCategory === "Toutes") return currentItems;
+    if (activeCategory === "Toutes") return activeItems;
 
-    return currentItems.filter(
+    return activeItems.filter(
       (item) => (item.document.category || "Pieces") === activeCategory
     );
-  }, [activeTab, activeCategory, pendingItems, doneItems]);
+  }, [activeCategory, activeItems]);
 
   useEffect(() => {
-    if (activeCategory !== "Toutes" && !categories.includes(activeCategory)) {
+    if (
+      activeCategory !== "Toutes" &&
+      !categoryOptions.some((category) => category.label === activeCategory)
+    ) {
       setActiveCategory("Toutes");
     }
-  }, [activeCategory, categories]);
+  }, [activeCategory, categoryOptions]);
 
   const companyFacts = useMemo(
     () => buildCompanyFacts(context, trustedContext),
@@ -581,15 +589,6 @@ export default function App() {
     );
     const record = currentState?.latest || null;
     const replacing = Boolean(record);
-
-    if (!context.folderPath) {
-      setNotice({
-        tone: "warning",
-        title: "Dossier cible manquant",
-        message: "Impossible de deposer sans folderPath.",
-      });
-      return;
-    }
 
     if (replacing && (!record.fileIdentifier || !record.filePath)) {
       setNotice({
@@ -888,33 +887,21 @@ export default function App() {
 
           <div className="portal-toolbar">
             <div className="category-strip" aria-label="Filtrer par categorie">
-              {categories.map((category) => {
-                const currentItems =
-                  activeTab === "pending" ? pendingItems : doneItems;
-                const count =
-                  category === "Toutes"
-                    ? currentItems.length
-                    : currentItems.filter(
-                        (item) =>
-                          (item.document.category || "Pieces") === category
-                      ).length;
-
-                return (
-                  <button
-                    key={category}
-                    type="button"
-                    className={
-                      activeCategory === category
-                        ? "cat-item cat-item--active"
-                        : "cat-item"
-                    }
-                    onClick={() => setActiveCategory(category)}
-                  >
-                    <span className="cat-item__label">{category}</span>
-                    <span className="cat-item__count">{count}</span>
-                  </button>
-                );
-              })}
+              {categoryOptions.map((category) => (
+                <button
+                  key={category.label}
+                  type="button"
+                  className={
+                    activeCategory === category.label
+                      ? "cat-item cat-item--active"
+                      : "cat-item"
+                  }
+                  onClick={() => setActiveCategory(category.label)}
+                >
+                  <span className="cat-item__label">{category.label}</span>
+                  <span className="cat-item__count">{category.count}</span>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -935,24 +922,32 @@ export default function App() {
               </div>
             ) : (
               visibleItems.map((item, index) => {
+                const rejected = item.latest?.reviewStatus === "rejected";
+                const rejectionNotice = rejected
+                  ? { comment: item.latest?.reviewComment || "" }
+                  : null;
                 const primaryDisabled =
                   interactionsLocked ||
-                  (item.latest
-                    ? !item.latest.fileIdentifier || !item.latest.filePath
-                    : !context.folderPath);
+                  (!rejected &&
+                    item.latest &&
+                    (!item.latest.fileIdentifier || !item.latest.filePath));
 
                 return (
                   <DocumentCard
                     key={item.document.id}
                     document={item.document}
-                    record={item.latest}
+                    record={rejected ? null : item.latest}
+                    rejectionNotice={rejectionNotice}
                     busy={actionState.documentId === item.document.id}
                     primaryDisabled={primaryDisabled}
                     canDelete={
-                      !interactionsLocked && Boolean(item.latest?.fileIdentifier)
+                      !interactionsLocked &&
+                      !rejected &&
+                      Boolean(item.latest?.fileIdentifier)
                     }
                     canPreview={
                       !interactionsLocked &&
+                      !rejected &&
                       Boolean(
                         item.latest?.filePath &&
                           isPreviewableFileName(item.latest?.fileName)
@@ -982,6 +977,7 @@ export default function App() {
         </div>
         <span className="portal-footer__copy">
           {context.brandName} | Portail entreprise securise
+          <AppVersion className="app-version--inline" />
         </span>
       </footer>
 

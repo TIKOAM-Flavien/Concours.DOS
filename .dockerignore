@@ -2,6 +2,8 @@ node_modules
 dist
 dist-all
 dist-admin
+dist-portal
+dist-*
 .git
 .env
 .env.*

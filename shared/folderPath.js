@@ -1,4 +1,4 @@
-// Shared SharePoint path normalizer.
+// Shared folder-path normalizer.
 //
 // Used by the server (server/security.js) and the frontend (src/config/env.js)
 // so that a folderPath baked into a signed invitation matches what the client
@@ -6,8 +6,8 @@
 //
 // The canonical form:
 //   - strips leading/trailing whitespace and any NUL characters,
-//   - collapses a SharePoint document-library URL to its site-relative path
-//     ("https://tenant.sharepoint.com/teams/X/Forms/..." → "/teams/X"),
+//   - collapses a full document-library URL to its site-relative path
+//     ("https://example.com/teams/X/Forms/..." → "/teams/X"),
 //   - percent-decodes the path (so "/teams/Depots%20MOE" and "/teams/Depots MOE"
 //     compare equal across client and server),
 //   - drops trailing slashes.
@@ -16,8 +16,6 @@
 // bundled by Vite for the browser.
 
 function cleanString(value) {
-  // Drop NUL and control characters that occasionally sneak in from Power
-  // Automate responses or copy-pasted SharePoint URLs.
   return String(value ?? "")
     .replace(/\u0000/g, "")
     .trim();
@@ -33,7 +31,7 @@ function safeDecodeUri(value) {
   }
 }
 
-export function normalizeSharePointFolderPath(value) {
+export function normalizeFolderPath(value) {
   const raw = cleanString(value);
   if (!raw) return "";
 
@@ -42,9 +40,7 @@ export function normalizeSharePointFolderPath(value) {
       const url = new URL(raw);
       let path = url.pathname || "";
 
-      // SharePoint often emits "sharing" URLs whose path starts with:
-      //   "/:x:/r/teams/..." or "/:f:/s/sites/..."
-      // The "/:*/[rs]/" prefix is not part of the actual server-relative path.
+      // Sharing URLs may use a "/:x:/r/" or "/:f:/s/" prefix before the path.
       path = path.replace(/^\/:[a-z]:\/[rs]\//i, "/");
 
       const formsIndex = path.toLowerCase().indexOf("/forms/");

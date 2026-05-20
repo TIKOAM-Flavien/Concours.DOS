@@ -19,10 +19,12 @@ async function request(path, options = {}) {
   let res;
   try {
     res = await fetch(url, {
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       ...options,
     });
   } catch (err) {
+    if (err?.name === "AbortError") throw err;
     if (isFetchNetworkFailure(err)) {
       throw new Error(
         "Impossible de joindre le serveur (pas de reponse HTTP). En local, utilisez `npm run dev` (API port 3001 + Vite avec proxy /api), pas seulement `vite`."
@@ -41,8 +43,16 @@ async function request(path, options = {}) {
   return data;
 }
 
-export function fetchProjects({ includeArchived = false } = {}) {
-  return request(`/projects${includeArchived ? "?includeArchived=1" : ""}`);
+export function fetchAuthSession() {
+  return request("/auth/session");
+}
+
+export function logoutAdminSession() {
+  return request("/auth/logout", { method: "POST" });
+}
+
+export function fetchProjects({ includeArchived = false } = {}, options = {}) {
+  return request(`/projects${includeArchived ? "?includeArchived=1" : ""}`, options);
 }
 
 export function archiveProject(id) {
@@ -59,6 +69,16 @@ export function unarchiveProject(id) {
 
 export function fetchProject(id) {
   return request(`/projects/${encodeURIComponent(id)}`);
+}
+
+export function fetchProjectActivity(projectId, { limit = 80 } = {}, options = {}) {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", String(limit));
+  const query = params.toString();
+  return request(
+    `/projects/${encodeURIComponent(projectId)}/activity${query ? `?${query}` : ""}`,
+    options
+  );
 }
 
 export function saveProject({ id, name, dossierId, folderPath, deadline, customDocuments }) {
@@ -93,12 +113,12 @@ export function deleteCompany(companyId) {
   return request(`/companies/${encodeURIComponent(companyId)}`, { method: "DELETE" });
 }
 
-export function fetchSecurityStatus() {
-  return request("/security");
+export function fetchSecurityStatus(options = {}) {
+  return request("/security", options);
 }
 
-export function fetchOverview() {
-  return request("/overview");
+export function fetchOverview(options = {}) {
+  return request("/overview", options);
 }
 
 export function generateSignedInvitationLink({ context, ttlMinutes } = {}) {
@@ -108,12 +128,20 @@ export function generateSignedInvitationLink({ context, ttlMinutes } = {}) {
   });
 }
 
+export function fetchProjectInvitations(projectId, options = {}) {
+  return request(`/projects/${encodeURIComponent(projectId)}/invitations`, options);
+}
+
+export function fetchStorageStats(options = {}) {
+  return request("/storage/stats", options);
+}
+
 export function sendInvitationEmails(projectId, companyIds) {
   return request(
     `/projects/${encodeURIComponent(projectId)}/send-invitations`,
     {
       method: "POST",
-      body: JSON.stringify({ companyIds: Array.isArray(companyIds) ? companyIds : [] }),
+      body: JSON.stringify({ companyIds }),
     }
   );
 }
@@ -123,13 +151,35 @@ export function sendReminderEmails(projectId, companyIds) {
     `/projects/${encodeURIComponent(projectId)}/send-reminders`,
     {
       method: "POST",
-      body: JSON.stringify({ companyIds: Array.isArray(companyIds) ? companyIds : [] }),
+      body: JSON.stringify({ companyIds }),
     }
   );
 }
 
-export function retryDocumentSync(recordId) {
-  return request(`/document-records/${encodeURIComponent(recordId)}/retry`, {
+export function revokeSignedInvitation(payload) {
+  return request("/invitations/revoke", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchRevokedInvitations(limit = 50) {
+  return request(`/invitations/revoked?limit=${encodeURIComponent(limit)}`);
+}
+
+export function runMaintenanceCleanup() {
+  return request("/maintenance/cleanup", { method: "POST" });
+}
+
+export function downloadAdminDocument(recordId) {
+  return request(`/documents/${encodeURIComponent(recordId)}/download`, {
+    method: "POST",
+  });
+}
+
+export function reviewAdminDocument(recordId, { reviewStatus, reviewComment = "" } = {}) {
+  return request(`/documents/${encodeURIComponent(recordId)}/review`, {
+    method: "PATCH",
+    body: JSON.stringify({ reviewStatus, reviewComment }),
   });
 }
