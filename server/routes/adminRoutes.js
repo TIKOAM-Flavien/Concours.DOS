@@ -1,8 +1,10 @@
 import { statfs } from "node:fs/promises";
 import rateLimit from "express-rate-limit";
 import { resolveDocumentList } from "../../src/config/documentCatalog.js";
+import { publishAdminEvent, subscribeToAdminEvents } from "../lib/realtimeBus.js";
 import { registerAdminDocumentRoutes } from "./adminDocumentRoutes.js";
 import {
+  bulkRevokeInvitations,
   deleteCompany as removeCompany,
   deleteProject as removeProject,
   getAllProjects,
@@ -134,6 +136,59 @@ export function registerAdminRoutes(app, ctx) {
     requireAdminAuth,
     wrap((req, res) => {
       res.json(buildAdminSecurityResponse(req));
+    })
+  );
+
+  // Server-Sent Events stream. Each admin tab opens one connection and gets
+  // a push when something happens server-side (upload, review, revoke, ...).
+  // Replaces the 30s polling loop the tracking panel used to run.
+  app.get(
+    "/api/admin/events",
+    requireAdminAuth,
+    wrap(async (req, res) => {
+      res.set({
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        // Disable nginx response buffering — otherwise events get held until
+        // the buffer flushes, defeating the point of a push channel.
+        "X-Accel-Buffering": "no",
+      });
+      res.flushHeaders?.();
+      // Initial retry hint + ready event so the client knows the channel is
+      // alive immediately rather than on the first real notify.
+      res.write("retry: 5000\n\n");
+      res.write(`event: ready\ndata: {"at":"${new Date().toISOString()}"}\n\n`);
+
+      const send = (event) => {
+        try {
+          const type = String(event?.type || "message");
+          res.write(`event: ${type}\n`);
+          res.write(`data: ${JSON.stringify(event || {})}\n\n`);
+        } catch {
+          // socket gone — close handler below clears the subscription
+        }
+      };
+
+      const unsubscribe = await subscribeToAdminEvents(send, { env });
+
+      // Reverse-proxies typically idle-close at 30s. Send a comment-line
+      // ping every 25s so the stream stays open.
+      const heartbeat = setInterval(() => {
+        try {
+          res.write(`: ping ${Date.now()}\n\n`);
+        } catch {
+          /* socket gone */
+        }
+      }, 25_000);
+      heartbeat.unref?.();
+
+      const cleanup = () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      };
+      req.on("close", cleanup);
+      req.on("aborted", cleanup);
     })
   );
 
@@ -359,6 +414,12 @@ export function registerAdminRoutes(app, ctx) {
         })),
       });
 
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "invitations",
+        projectId: project.id,
+      });
+
       res.json({ ok: true, count: invitations.length, result });
     })
   );
@@ -496,6 +557,12 @@ export function registerAdminRoutes(app, ctx) {
         })),
       });
 
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "invitations",
+        projectId: project.id,
+      });
+
       res.json({ ok: true, count: reminders.length, skipped, result });
     })
   );
@@ -555,6 +622,13 @@ export function registerAdminRoutes(app, ctx) {
         dossierId: payload.dossierId || "",
       });
 
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "invitations",
+        projectId: payload.projectId || "",
+        companyId: payload.companyId || "",
+      });
+
       res.json({
         ok: true,
         revoked: true,
@@ -570,6 +644,88 @@ export function registerAdminRoutes(app, ctx) {
     wrap(async (req, res) => {
       const limit = parsePositiveInt(req.query?.limit, 50);
       res.json({ items: await listRevokedInvitations(limit) });
+    })
+  );
+
+  app.post(
+    "/api/admin/projects/:projectId/invitations/revoke-all",
+    requireAdminAuth,
+    wrap(async (req, res) => {
+      const project = await getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ error: "Project not found" });
+
+      const reason =
+        normalizeTextField(req.body?.reason, "reason", { max: 500 }) ||
+        "Bulk revoke (project)";
+
+      const result = await bulkRevokeInvitations({
+        projectId: project.id,
+        reason,
+      });
+
+      await audit(req, "admin.invitation.revoke.bulk", {
+        scope: "project",
+        projectId: project.id,
+        reason,
+        revoked: result.revoked,
+        ids: result.ids,
+      });
+
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "invitations",
+        projectId: project.id,
+      });
+
+      res.json({ ok: true, scope: "project", projectId: project.id, ...result });
+    })
+  );
+
+  app.post(
+    "/api/admin/projects/:projectId/companies/:companyId/invitations/revoke-all",
+    requireAdminAuth,
+    wrap(async (req, res) => {
+      const project = await getProject(req.params.projectId);
+      if (!project) return res.status(404).json({ error: "Project not found" });
+
+      const companyId = String(req.params.companyId || "").trim();
+      if (!companyId) {
+        throw badRequest("companyId is required.");
+      }
+
+      const reason =
+        normalizeTextField(req.body?.reason, "reason", { max: 500 }) ||
+        "Bulk revoke (company)";
+
+      const result = await bulkRevokeInvitations({
+        projectId: project.id,
+        companyId,
+        reason,
+      });
+
+      await audit(req, "admin.invitation.revoke.bulk", {
+        scope: "company",
+        projectId: project.id,
+        companyId,
+        reason,
+        revoked: result.revoked,
+        ids: result.ids,
+      });
+
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "invitations",
+        projectId: project.id,
+        companyId,
+      });
+
+      res.json({
+        ok: true,
+        scope: "company",
+        projectId: project.id,
+        companyId,
+        ...result,
+      });
     })
   );
 
@@ -611,11 +767,30 @@ export function registerAdminRoutes(app, ctx) {
       const existing = await getProject(req.params.id);
       if (!existing) return res.status(404).json({ error: "Project not found" });
       const project = await setProjectArchived(req.params.id, true);
+
+      // Per the audit decision: archiving a project is treated as a hard
+      // boundary — every active invitation tied to it is revoked so a stale
+      // link cannot be reused after the project leaves the active set.
+      // Unarchive does NOT restore them; the admin reissues fresh links.
+      const revoke = await bulkRevokeInvitations({
+        projectId: project.id,
+        reason: "Project archived",
+      });
+
       await audit(req, "admin.project.archive", {
         projectId: project.id,
         name: project.name,
+        autoRevoked: revoke.revoked,
+        revokedIds: revoke.ids,
       });
-      res.json(project);
+
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "projects",
+        projectId: project.id,
+      });
+
+      res.json({ ...project, autoRevokedInvitations: revoke.revoked });
     })
   );
 
@@ -629,6 +804,13 @@ export function registerAdminRoutes(app, ctx) {
         projectId: project.id,
         name: project.name,
       });
+
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "projects",
+        projectId: project.id,
+      });
+
       res.json(project);
     })
   );

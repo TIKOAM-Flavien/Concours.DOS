@@ -229,13 +229,21 @@ export async function markExpiredInvitations({ now = new Date() } = {}) {
 
 export async function listLatestInvitationsByProject(projectId) {
   const pool = getPool();
+  // Exclude revoked invitations: when an admin revokes (single or bulk), the
+  // company's row in the admin invitations panel should reset to "Aucune" so
+  // the status pill, reminder count, and open count all collapse to zero.
+  // The latest *non-revoked* invitation surfaces — if a company has only
+  // revoked invitations they disappear from this list entirely.
   const result = await pool.query(
-    `SELECT DISTINCT ON ("companyId")
-            id, payload, "projectId", "companyId", "submissionId",
-            status, "sentAt", "replacesInvitationId", iat, exp, "createdAt", "updatedAt"
-     FROM signed_invitations
-     WHERE "projectId" = $1
-     ORDER BY "companyId", "createdAt" DESC`,
+    `SELECT DISTINCT ON (s."companyId")
+            s.id, s.payload, s."projectId", s."companyId", s."submissionId",
+            s.status, s."sentAt", s."replacesInvitationId", s.iat, s.exp,
+            s."createdAt", s."updatedAt"
+     FROM signed_invitations s
+     LEFT JOIN revoked_invitations r ON r.id = s.id
+     WHERE s."projectId" = $1
+       AND r.id IS NULL
+     ORDER BY s."companyId", s."createdAt" DESC`,
     [String(projectId || "")]
   );
   return result.rows.map(mapInvitationRow);
@@ -243,24 +251,32 @@ export async function listLatestInvitationsByProject(projectId) {
 
 export async function listInvitationSendCountsByProject(projectId) {
   const pool = getPool();
-  // Count every email actually sent (sentAt set). Re-issued links keep sentAt on
-  // older rows, so reminders increment the counter unlike status = 'sent' alone.
+  // Count every email actually sent (sentAt set). Re-issued links keep sentAt
+  // on older rows, so reminders increment the counter unlike status = 'sent'
+  // alone. Revoked invitations are excluded from both subqueries so the
+  // reminder pill resets to zero when an admin revokes — the historical fact
+  // that emails were sent is preserved in audit_log but no longer surfaces
+  // in the "current invitation status" view of the admin panel.
   const result = await pool.query(
     `WITH legacy_counts AS (
-       SELECT "companyId",
-              COUNT(*) FILTER (WHERE "sentAt" IS NOT NULL)::int AS "sentCount"
-       FROM signed_invitations
-       WHERE "projectId" = $1
-         AND "companyId" <> ''
-       GROUP BY "companyId"
+       SELECT s."companyId",
+              COUNT(*) FILTER (WHERE s."sentAt" IS NOT NULL)::int AS "sentCount"
+       FROM signed_invitations s
+       LEFT JOIN revoked_invitations r ON r.id = s.id
+       WHERE s."projectId" = $1
+         AND s."companyId" <> ''
+         AND r.id IS NULL
+       GROUP BY s."companyId"
      ),
      event_counts AS (
        SELECT s."companyId",
               COUNT(e.id)::int AS "eventCount"
        FROM signed_invitations s
+       LEFT JOIN revoked_invitations r ON r.id = s.id
        JOIN invitation_events e ON e."invitationId" = s.id
        WHERE s."projectId" = $1
          AND s."companyId" <> ''
+         AND r.id IS NULL
          AND e."eventType" IN ('email_sent', 'email_reminder_sent')
        GROUP BY s."companyId"
      )

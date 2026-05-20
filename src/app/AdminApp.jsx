@@ -25,6 +25,7 @@ import { useAdminOverview } from "../hooks/useAdminOverview";
 import { useAdminProjects } from "../hooks/useAdminProjects";
 import { useAdminSigning } from "../hooks/useAdminSigning";
 import { useAdminStorageStats } from "../hooks/useAdminStorageStats";
+import { useAdminLiveEvents } from "../hooks/useAdminLiveEvents";
 import { useAdminProjectActivity } from "../hooks/useAdminProjectActivity.js";
 import { useAdminTracking } from "../hooks/useAdminTracking";
 import { useModalLock } from "../hooks/useModalLock";
@@ -118,6 +119,8 @@ function AdminAppDashboard({ authSession, onLogout }) {
     handleDeleteProject,
     handleArchiveProject,
     handleUnarchiveProject,
+    handleRevokeAllProjectLinks,
+    handleRevokeCompanyLinks,
     handleCompanySubmit,
     handleEditCompany,
     handleSelectFromDirectory,
@@ -129,6 +132,7 @@ function AdminAppDashboard({ authSession, onLogout }) {
     handleDeleteCompany,
     handleGenerateLink,
     refreshInvitationStatuses,
+    refreshProjects,
   } = useAdminProjects({
     defaultFolderPath: portalEnv.defaultFolderPath,
     refreshOverview,
@@ -157,8 +161,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
     trackingView,
     setTrackingView,
     trackingManualBusy,
-    trackingPollProgress,
-    trackingPollDelayMs,
     hasTrackingFilters,
     refreshTrackingManual,
     resetTrackingFilters,
@@ -178,6 +180,43 @@ function AdminAppDashboard({ authSession, onLogout }) {
   } = useAdminProjectActivity({
     projectId: selectedProject?.id || "",
     refreshKey: trackingRefreshKey,
+  });
+
+  // Server-pushed updates: when something changes in the DB (upload from the
+  // portal, review, revoke, archive, ...) the relevant slice of admin state
+  // is refetched. Events scoped to another project are dropped to avoid
+  // re-rendering unrelated panels.
+  useAdminLiveEvents({
+    enabled: true,
+    onInvalidate(event) {
+      const eventProjectId = String(event?.projectId || "").trim();
+      const currentProjectId = selectedProject?.id || "";
+      const scope = String(event?.scope || "");
+
+      if (scope === "projects") {
+        refreshProjects();
+        refreshOverview();
+        return;
+      }
+
+      // Per-project scopes: only refresh when this admin tab is viewing the
+      // project the event is about (or when the event has no projectId — we
+      // can't be sure so we refresh defensively).
+      if (eventProjectId && currentProjectId && eventProjectId !== currentProjectId) {
+        return;
+      }
+
+      if (scope === "invitations") {
+        refreshInvitationStatuses();
+        refreshOverview();
+        return;
+      }
+
+      // scope === "documents" (or unknown): pull both the document tracking
+      // and the invitation status because upload completion mutates both.
+      refreshTrackingManual();
+      refreshInvitationStatuses();
+    },
   });
 
   const selectedProjectReceived = useMemo(
@@ -422,6 +461,8 @@ function AdminAppDashboard({ authSession, onLogout }) {
             onEditCompany={handleEditCompany}
             onGenerateLink={handleGenerateLink}
             onDeleteCompany={handleDeleteCompany}
+            onRevokeCompanyLinks={handleRevokeCompanyLinks}
+            onRevokeAllProjectLinks={handleRevokeAllProjectLinks}
           />
 
           <AdminTrackingPanel
@@ -450,8 +491,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
             onTrackingViewChange={setTrackingView}
             hasTrackingFilters={hasTrackingFilters}
             trackingManualBusy={trackingManualBusy}
-            trackingPollProgress={trackingPollProgress}
-            trackingPollDelayMs={trackingPollDelayMs}
             invitationStatusByCompanyId={invitationStatusByCompanyId}
             onSendInvitations={handleSendInvitations}
             onSendReminders={handleSendReminders}

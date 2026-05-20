@@ -8,6 +8,7 @@ import {
   listDocumentUploadJobsForProject,
   updateDocumentRecordReview,
 } from "../db.js";
+import { publishAdminEvent } from "../lib/realtimeBus.js";
 import { reviewStatusSchema, validateBody } from "../lib/validation.js";
 
 // Extracted from adminRoutes.js so the file stays maintainable. All routes
@@ -123,6 +124,13 @@ export function registerAdminDocumentRoutes(app, ctx) {
         documentType: updated.documentType,
         reviewStatus,
         reviewedBy,
+      });
+
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "documents",
+        projectId: updated.projectId,
+        companyId: updated.companyId,
       });
 
       res.json(documentRecordToFlowRow(updated));

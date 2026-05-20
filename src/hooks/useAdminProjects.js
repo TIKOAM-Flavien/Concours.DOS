@@ -530,13 +530,13 @@ export function useAdminProjects({
     if (!project) return;
     if (
       !window.confirm(
-        `Archiver le projet "${project.name}" ? Il sera masque de l'interface mais conserve en base.`
+        `Archiver le projet "${project.name}" ? Il sera masque de l'interface et TOUS les liens signes actifs seront revoques (definitif, le desarchivage ne les restaure pas).`
       )
     ) {
       return;
     }
     try {
-      await api.archiveProject(projectId);
+      const archived = await api.archiveProject(projectId);
       if (selectedProjectId === projectId) {
         setSelectedProjectId("");
         setProjectForm(createEmptyProjectForm(defaultFolderPath));
@@ -544,10 +544,14 @@ export function useAdminProjects({
       }
       await refreshProjects();
       await refreshOverview();
+      const revokedCount = Number(archived?.autoRevokedInvitations) || 0;
       setNotice({
         tone: "success",
         title: "Projet archive",
-        message: `${project.name} a ete archive et masque de l'interface.`,
+        message:
+          revokedCount > 0
+            ? `${project.name} a ete archive. ${revokedCount} lien(s) revoque(s).`
+            : `${project.name} a ete archive et masque de l'interface.`,
       });
     } catch (err) {
       setNotice({ tone: "error", title: "Erreur", message: err.message });
@@ -564,7 +568,61 @@ export function useAdminProjects({
       setNotice({
         tone: "success",
         title: "Projet desarchive",
-        message: `${project.name} est de nouveau visible dans l'interface.`,
+        message: `${project.name} est de nouveau visible dans l'interface. Les liens revoques ne sont pas restaures, generez-en de nouveaux si besoin.`,
+      });
+    } catch (err) {
+      setNotice({ tone: "error", title: "Erreur", message: err.message });
+    }
+  }
+
+  async function handleRevokeAllProjectLinks(project) {
+    const target = project || selectedProject;
+    if (!target) return;
+    if (
+      !window.confirm(
+        `Revoquer TOUS les liens actifs du projet "${target.name}" ? Action definitive : les destinataires devront recevoir un nouveau lien pour acceder au portail.`
+      )
+    ) {
+      return;
+    }
+    try {
+      const result = await api.revokeAllProjectInvitations(target.id);
+      await refreshInvitationStatuses();
+      setNotice({
+        tone: "success",
+        title: "Liens revoques",
+        message:
+          result.revoked > 0
+            ? `${result.revoked} lien(s) du projet ${target.name} revoque(s).`
+            : `Aucun lien actif a revoquer sur ${target.name}.`,
+      });
+    } catch (err) {
+      setNotice({ tone: "error", title: "Erreur", message: err.message });
+    }
+  }
+
+  async function handleRevokeCompanyLinks(company) {
+    if (!selectedProject || !company) return;
+    if (
+      !window.confirm(
+        `Revoquer les liens actifs de "${company.companyName}" ? Action definitive : un nouveau lien devra etre genere pour redonner acces.`
+      )
+    ) {
+      return;
+    }
+    try {
+      const result = await api.revokeAllCompanyInvitations(
+        selectedProject.id,
+        company.companyId || company.id
+      );
+      await refreshInvitationStatuses();
+      setNotice({
+        tone: "success",
+        title: "Liens revoques",
+        message:
+          result.revoked > 0
+            ? `${result.revoked} lien(s) revoque(s) pour ${company.companyName}.`
+            : `Aucun lien actif a revoquer pour ${company.companyName}.`,
       });
     } catch (err) {
       setNotice({ tone: "error", title: "Erreur", message: err.message });
@@ -859,6 +917,8 @@ export function useAdminProjects({
     handleDeleteProject,
     handleArchiveProject,
     handleUnarchiveProject,
+    handleRevokeAllProjectLinks,
+    handleRevokeCompanyLinks,
     handleCompanySubmit,
     handleEditCompany,
     handleSelectFromDirectory,
@@ -870,5 +930,6 @@ export function useAdminProjects({
     handleDeleteCompany,
     handleGenerateLink,
     refreshInvitationStatuses,
+    refreshProjects,
   };
 }

@@ -66,8 +66,6 @@ export default function AdminTrackingPanel({
   onTrackingViewChange,
   hasTrackingFilters,
   trackingManualBusy,
-  trackingPollProgress,
-  trackingPollDelayMs,
   invitationStatusByCompanyId,
   onSendInvitations,
   onSendReminders,
@@ -153,28 +151,6 @@ export default function AdminTrackingPanel({
           </button>
         </div>
       </div>
-
-      {selectedProject && documentsEnabled && trackingPollDelayMs > 0 ? (
-        <div
-          className="admin-tracking-poll"
-          role="progressbar"
-          aria-label="Prochaine actualisation automatique du suivi"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={trackingPollProgress}
-          aria-valuetext={`Prochaine actualisation dans ${Math.max(
-            0,
-            Math.ceil(((100 - trackingPollProgress) / 100) * (trackingPollDelayMs / 1000))
-          )} secondes`}
-          title="Actualisation automatique toutes les 30 secondes"
-        >
-          <div
-            className="admin-tracking-poll__bar"
-            style={{ transform: `scaleX(${trackingPollProgress / 100})` }}
-          />
-          <span className="admin-tracking-poll__label">Actualisation auto · 30 s</span>
-        </div>
-      ) : null}
 
       {syncState.status === "error" ? (
         <StatusBanner tone="error" title="Erreur de chargement des depots">

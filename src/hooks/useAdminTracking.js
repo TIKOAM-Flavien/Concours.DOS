@@ -11,8 +11,6 @@ import {
 } from "../lib/adminTrackingLogic.js";
 import { normalizeDocumentRecords } from "../lib/documentRecords.js";
 
-const TRACKING_POLL_MS = 30_000;
-
 export function useAdminTracking({
   client,
   selectedProject,
@@ -58,11 +56,7 @@ export function useAdminTracking({
 
       const refreshMode = trackingRefreshModeRef.current;
       trackingRefreshModeRef.current = "initial";
-      const silentRefresh = refreshMode === "silent";
-
-      if (!silentRefresh) {
-        setSyncState((current) => ({ ...current, status: "loading", error: "" }));
-      }
+      setSyncState((current) => ({ ...current, status: "loading", error: "" }));
 
       try {
         const rows = await client.listDocuments(
@@ -88,13 +82,12 @@ export function useAdminTracking({
           error: "",
         });
 
-        if (refreshMode === "manual" || refreshMode === "silent") {
+        if (refreshMode === "manual") {
           await onTrackingRefreshRef.current?.();
         }
       } catch (error) {
         if (error?.name === "AbortError") return;
         if (!active) return;
-        if (silentRefresh) return;
         setSyncState({
           status: "error",
           records: [],
@@ -119,93 +112,6 @@ export function useAdminTracking({
     selectedProject,
     trackingRefreshKey,
   ]);
-
-  const trackingPollDelayMs =
-    selectedProject && documentsEnabled ? TRACKING_POLL_MS : 0;
-  const [trackingPollProgress, setTrackingPollProgress] = useState(0);
-
-  useEffect(() => {
-    if (!trackingPollDelayMs || typeof window === "undefined") {
-      setTrackingPollProgress(0);
-      return undefined;
-    }
-
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reducedMotion) {
-      setTrackingPollProgress(100);
-      return undefined;
-    }
-
-    let cancelled = false;
-    let rafId = 0;
-    const cycleStart = Date.now();
-
-    function frame() {
-      if (cancelled) return;
-      const elapsed = Date.now() - cycleStart;
-      const ratio = Math.min(1, elapsed / trackingPollDelayMs);
-      setTrackingPollProgress(Math.round(ratio * 100));
-      if (ratio < 1) {
-        rafId = window.requestAnimationFrame(frame);
-      }
-    }
-
-    setTrackingPollProgress(0);
-    rafId = window.requestAnimationFrame(frame);
-
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(rafId);
-    };
-  }, [trackingPollDelayMs, trackingRefreshKey]);
-
-  useEffect(() => {
-    if (!selectedProject || !documentsEnabled || !trackingPollDelayMs) return undefined;
-
-    let cancelled = false;
-    let timer = null;
-    const startedAt = Date.now();
-    const maxRunMs = 60 * 60 * 1000;
-
-    const isHidden = () =>
-      typeof document !== "undefined" && document.visibilityState === "hidden";
-
-    function schedule(ms) {
-      if (cancelled) return;
-      timer = window.setTimeout(tick, ms);
-    }
-
-    function tick() {
-      if (cancelled) return;
-      if (Date.now() - startedAt > maxRunMs) {
-        cancelled = true;
-        return;
-      }
-      if (isHidden()) {
-        schedule(trackingPollDelayMs);
-        return;
-      }
-      trackingRefreshModeRef.current = "silent";
-      setTrackingRefreshKey((current) => current + 1);
-      schedule(trackingPollDelayMs);
-    }
-
-    function onVisibility() {
-      if (cancelled) return;
-      if (!isHidden()) {
-        if (timer) window.clearTimeout(timer);
-        tick();
-      }
-    }
-
-    document.addEventListener("visibilitychange", onVisibility);
-    schedule(trackingPollDelayMs);
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [documentsEnabled, selectedProject, trackingPollDelayMs]);
 
   const companyTracking = useMemo(
     () =>
@@ -312,8 +218,6 @@ export function useAdminTracking({
     trackingView,
     setTrackingView,
     trackingManualBusy,
-    trackingPollProgress,
-    trackingPollDelayMs,
     trackingRefreshKey,
     hasTrackingFilters,
     refreshTrackingManual,

@@ -163,6 +163,26 @@ export function revokeSignedInvitation(payload) {
   });
 }
 
+export function revokeAllProjectInvitations(projectId, { reason = "" } = {}) {
+  return request(
+    `/projects/${encodeURIComponent(projectId)}/invitations/revoke-all`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }
+  );
+}
+
+export function revokeAllCompanyInvitations(projectId, companyId, { reason = "" } = {}) {
+  return request(
+    `/projects/${encodeURIComponent(projectId)}/companies/${encodeURIComponent(companyId)}/invitations/revoke-all`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }
+  );
+}
+
 export function fetchRevokedInvitations(limit = 50) {
   return request(`/invitations/revoked?limit=${encodeURIComponent(limit)}`);
 }

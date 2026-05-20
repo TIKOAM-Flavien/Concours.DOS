@@ -15,6 +15,7 @@ import {
   parseMultipartFileUpload,
   removeStoredUploadDir,
 } from "../documentFiles.js";
+import { publishAdminEvent } from "./realtimeBus.js";
 
 export function createUploadHandlers({
   env,
@@ -182,6 +183,17 @@ export function createUploadHandlers({
       await commitSubmissionDailyBudget(invitation, { cost: 2 });
 
       const record = await getDocumentRecordById(recordId);
+
+      // Notify all live admin tabs that this project's documents changed.
+      // Cross-process via PG NOTIFY — the admin container picks it up even
+      // though this code runs in the portal container.
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "documents",
+        projectId: record?.projectId || invitation.projectId || project?.id || "",
+        companyId: record?.companyId || invitation.companyId || "",
+        operation: effectiveOperation,
+      });
 
       return {
         ok: true,

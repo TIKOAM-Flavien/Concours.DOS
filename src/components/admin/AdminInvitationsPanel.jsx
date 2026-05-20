@@ -52,9 +52,15 @@ export default function AdminInvitationsPanel({
   onEditCompany,
   onGenerateLink,
   onDeleteCompany,
+  onRevokeCompanyLinks,
+  onRevokeAllProjectLinks,
 }) {
   const companies = selectedProject?.companies || [];
   const allSelected = companies.length > 0 && selectedCompanyIds.size === companies.length;
+  const hasAnyActiveInvitation = companies.some((company) => {
+    const status = invitationStatusByCompanyId[company.companyId]?.status;
+    return status === "generated" || status === "sent";
+  });
 
   return (
     <section className="admin-panel">
@@ -74,6 +80,21 @@ export default function AdminInvitationsPanel({
           <span className="admin-panel__meta">
             {selectedProject ? selectedProject.name : "Aucun projet selectionne"}
           </span>
+          {selectedProject && onRevokeAllProjectLinks ? (
+            <button
+              type="button"
+              className={`btn ${hasAnyActiveInvitation ? "btn--danger-sm" : "btn--disabled"}`}
+              onClick={() => onRevokeAllProjectLinks(selectedProject)}
+              disabled={!hasAnyActiveInvitation}
+              title={
+                hasAnyActiveInvitation
+                  ? "Revoquer tous les liens actifs de ce projet."
+                  : "Aucun lien actif a revoquer."
+              }
+            >
+              Revoquer tous les liens
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -104,7 +125,12 @@ export default function AdminInvitationsPanel({
               </tr>
             </thead>
             <tbody>
-              {companies.map((company) => (
+              {companies.map((company) => {
+                const invitationStatus =
+                  invitationStatusByCompanyId[company.companyId]?.status;
+                const hasActiveLink =
+                  invitationStatus === "generated" || invitationStatus === "sent";
+                return (
                 <tr key={company.id}>
                   <td>
                     <input
@@ -156,6 +182,16 @@ export default function AdminInvitationsPanel({
                       >
                         Lien
                       </button>
+                      {hasActiveLink && onRevokeCompanyLinks ? (
+                        <button
+                          type="button"
+                          className="btn btn--danger-sm"
+                          onClick={() => onRevokeCompanyLinks(company)}
+                          title="Revoquer tous les liens actifs de cette entreprise."
+                        >
+                          Revoquer
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="btn btn--danger-sm"
@@ -166,7 +202,8 @@ export default function AdminInvitationsPanel({
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -6,6 +6,7 @@ import {
   markDocumentRecordDeleted,
 } from "../db.js";
 import { removeStoredUploadDir } from "../documentFiles.js";
+import { publishAdminEvent } from "../lib/realtimeBus.js";
 
 export function registerPortalRoutes(app, ctx) {
   const {
@@ -103,6 +104,14 @@ export function registerPortalRoutes(app, ctx) {
       await markDocumentRecordDeleted(record.id);
       await removeStoredUploadDir(record.id, env).catch(() => {});
       await commitSubmissionDailyBudget(invitation, { cost: 1 });
+
+      publishAdminEvent({
+        type: "admin.invalidate",
+        scope: "documents",
+        projectId: invitation.projectId || "",
+        companyId: invitation.companyId || "",
+        operation: "delete",
+      });
 
       res.json({ ok: true, localOnly: true });
     })

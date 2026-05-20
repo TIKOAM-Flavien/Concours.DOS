@@ -13,6 +13,7 @@ export {
 } from "./repositories/projects.js";
 
 export {
+  bulkRevokeInvitations,
   isInvitationRevoked,
   revokeInvitation,
   listRevokedInvitations,
