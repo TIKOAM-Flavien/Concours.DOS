@@ -72,16 +72,6 @@ export default function ProjectModal({
                 />
               </label>
               <label className="field field--wide">
-                <span className="field__label">Chemin dossier (metadata)</span>
-                <input
-                  type="text"
-                  value={projectForm.folderPath}
-                  onChange={(event) => onFieldChange("folderPath", event.target.value)}
-                  placeholder="/sites/DEPOTS/projet-groupe-scolaire"
-                  required
-                />
-              </label>
-              <label className="field field--wide">
                 <span className="field__label">Date limite</span>
                 <input
                   type="datetime-local"

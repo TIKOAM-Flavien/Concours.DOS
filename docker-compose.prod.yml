@@ -47,7 +47,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       TRUST_PROXY: "1"
       PORTAL_ADMIN_ALLOWED_IPS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
-      CLIENT_PORTAL_PUBLIC_URL: "http://localhost:3002/depot"
+      CLIENT_PORTAL_PUBLIC_URL: ${CLIENT_PORTAL_PUBLIC_URL:?Set CLIENT_PORTAL_PUBLIC_URL in .env.production}
       PORTAL_UPLOAD_STAGING_DIR: /data/uploads
     env_file:
       - path: .env.production

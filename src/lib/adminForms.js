@@ -1,11 +1,10 @@
 import { DEFAULT_EXPECTED_DOCUMENTS } from "./adminConstants.js";
 
-export function createEmptyProjectForm(defaultFolderPath = "") {
+export function createEmptyProjectForm() {
   return {
     id: "",
     name: "",
     dossierId: "",
-    folderPath: defaultFolderPath,
     deadline: "",
     customDocumentsText: "",
   };
@@ -28,7 +27,6 @@ export function toProjectForm(project) {
     id: project.id,
     name: project.name || "",
     dossierId: project.dossierId || "",
-    folderPath: project.folderPath || "",
     deadline: project.deadline || "",
     customDocumentsText: Array.isArray(project.customDocuments)
       ? project.customDocuments

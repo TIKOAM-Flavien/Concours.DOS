@@ -42,7 +42,7 @@ export function useAdminProjects({
 }) {
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [projectForm, setProjectForm] = useState(() => createEmptyProjectForm(defaultFolderPath));
+  const [projectForm, setProjectForm] = useState(() => createEmptyProjectForm());
   const [companyForm, setCompanyForm] = useState(() => createEmptyCompanyForm());
   const [dbLoading, setDbLoading] = useState(true);
   const [companyDocumentSearch, setCompanyDocumentSearch] = useState("");
@@ -149,7 +149,7 @@ export function useAdminProjects({
   useEffect(() => {
     if (!projects.length) {
       setSelectedProjectId("");
-      setProjectForm(createEmptyProjectForm(defaultFolderPath));
+      setProjectForm(createEmptyProjectForm());
       return;
     }
     if (!selectedProjectId) return;
@@ -258,7 +258,7 @@ export function useAdminProjects({
         id: selectedProject.id,
         name: selectedProject.name || "",
         dossierId: selectedProject.dossierId || "",
-        folderPath: selectedProject.folderPath || "",
+        folderPath: defaultFolderPath || selectedProject.folderPath || "",
         deadline: selectedProject.deadline || "",
         customDocuments: nextCustomDocs,
       });
@@ -298,7 +298,7 @@ export function useAdminProjects({
 
   function handleNewProject() {
     setSelectedProjectId("");
-    setProjectForm(createEmptyProjectForm(defaultFolderPath));
+    setProjectForm(createEmptyProjectForm());
     setCompanyForm(createEmptyCompanyForm());
     setSelectedCompanyIds(new Set());
     setProjectModalOpen(true);
@@ -455,11 +455,21 @@ export function useAdminProjects({
   async function handleProjectSubmit(event) {
     event.preventDefault();
 
-    if (!projectForm.name.trim() || !projectForm.dossierId.trim() || !projectForm.folderPath.trim()) {
+    if (!projectForm.name.trim() || !projectForm.dossierId.trim()) {
       setNotice({
         tone: "warning",
         title: "Projet incomplet",
-        message: "Renseignez le nom, le dossier et le folderPath du projet.",
+        message: "Renseignez le nom et le code dossier du projet.",
+      });
+      return;
+    }
+
+    if (!defaultFolderPath.trim()) {
+      setNotice({
+        tone: "warning",
+        title: "Configuration manquante",
+        message:
+          "Le chemin dossier par defaut n'est pas configure (VITE_CLIENT_PORTAL_DEFAULT_FOLDER_PATH au build).",
       });
       return;
     }
@@ -472,7 +482,7 @@ export function useAdminProjects({
         id: projectId,
         name: projectForm.name.trim(),
         dossierId: projectForm.dossierId.trim(),
-        folderPath: projectForm.folderPath.trim(),
+        folderPath: defaultFolderPath,
         deadline: projectForm.deadline ? projectForm.deadline.trim() : "",
         customDocuments: projectForm.customDocumentsText
           .split(/\r?\n/)
@@ -539,7 +549,7 @@ export function useAdminProjects({
       const archived = await api.archiveProject(projectId);
       if (selectedProjectId === projectId) {
         setSelectedProjectId("");
-        setProjectForm(createEmptyProjectForm(defaultFolderPath));
+        setProjectForm(createEmptyProjectForm());
         setCompanyForm(createEmptyCompanyForm());
       }
       await refreshProjects();
@@ -837,7 +847,7 @@ export function useAdminProjects({
           submissionId: company.submissionId,
           contestName: selectedProject.name,
           dossierId: selectedProject.dossierId,
-          folderPath: selectedProject.folderPath,
+          folderPath: defaultFolderPath || selectedProject.folderPath,
           deadline: selectedProject.deadline,
           supportEmail: portalEnv.supportEmail,
           supportPhone: portalEnv.supportPhone,
