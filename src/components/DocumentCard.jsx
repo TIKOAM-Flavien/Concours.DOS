@@ -137,8 +137,20 @@ export default function DocumentCard({
         <label
           className={`btn ${canReplace ? "btn--ghost" : "btn--primary"} ${primaryDisabled ? "btn--disabled" : ""}`}
           htmlFor={inputId}
+          aria-busy={busy || undefined}
         >
-          {busy ? "Traitement..." : canReplace ? "Remplacer" : rejected ? "Re-deposer" : "Deposer"}
+          {busy ? (
+            <>
+              <span className="spinner spinner--sm" aria-hidden="true" />
+              Traitement...
+            </>
+          ) : canReplace ? (
+            "Remplacer"
+          ) : rejected ? (
+            "Re-deposer"
+          ) : (
+            "Deposer"
+          )}
         </label>
         <input
           id={inputId}

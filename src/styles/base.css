@@ -1,26 +1,134 @@
+/* =============================================================================
+ * Design tokens
+ * Single source of truth for spacing, typography, color, radius, shadow,
+ * motion. Component styles must reference these tokens, not raw values.
+ * ========================================================================== */
+
 :root {
   color-scheme: light;
+
+  /* Brand & surfaces ------------------------------------------------------ */
   --bg: #eee7dd;
   --bg-strong: #ded4c8;
   --surface: #f8f3ec;
   --surface-strong: #fffdf8;
+  --surface-overlay: rgba(255, 253, 248, 0.92);
+
+  /* Ink / text ----------------------------------------------------------- */
   --ink: #241f1a;
+  --ink-soft: #4a3f36;
   --muted: #6f6256;
+  --on-accent: #ffffff;
+
+  /* Lines ---------------------------------------------------------------- */
   --line: #d9cabb;
   --line-strong: #a99786;
+  --line-faint: rgba(217, 202, 187, 0.55);
+
+  /* Accent (warm brown brand) ------------------------------------------- */
   --accent: #856049;
+  --accent-hover: #6f4d39;
+  --accent-active: #5a3d2d;
   --accent-strong: #342820;
   --accent-soft: #f0e6dc;
+  --accent-ring: rgba(133, 96, 73, 0.32);
+
+  /* Semantic palette ---------------------------------------------------- */
   --success: #53677a;
+  --success-strong: #3f5266;
   --success-soft: #e8edf1;
+  --success-border: #b7c3ce;
+
   --warning: #8d5a1b;
+  --warning-strong: #6f4514;
   --warning-soft: #f7ead7;
+  --warning-border: #d9c9a3;
+
   --danger: #962d2d;
+  --danger-strong: #7a2222;
   --danger-soft: #f7e6e2;
-  --radius-sm: 0;
-  --radius: 0;
-  font-family: "Aptos", "Segoe UI", Tahoma, Arial, sans-serif;
-  line-height: 1.5;
+  --danger-border: #d9b4b4;
+
+  --info: #2f5f96;
+  --info-soft: rgba(52, 108, 176, 0.12);
+  --info-border: rgba(52, 108, 176, 0.32);
+
+  /* Spacing scale (4px base) -------------------------------------------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Radius scale -------------------------------------------------------- */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* Typography ---------------------------------------------------------- */
+  --font-sans: "Aptos", "Segoe UI", Tahoma, Arial, sans-serif;
+  --font-display: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
+  --font-condensed: "Bahnschrift SemiCondensed", "Aptos Narrow", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Consolas", monospace;
+
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.82rem;
+  --fs-md: 0.92rem;
+  --fs-base: 1rem;
+  --fs-lg: 1.15rem;
+  --fs-xl: 1.4rem;
+  --fs-2xl: 1.85rem;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-black: 800;
+
+  --lh-tight: 1.2;
+  --lh-snug: 1.35;
+  --lh-base: 1.5;
+
+  --tracking-tight: 0;
+  --tracking-wide: 0.04em;
+  --tracking-wider: 0.06em;
+  --tracking-widest: 0.08em;
+
+  /* Elevation ----------------------------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(33, 27, 22, 0.06);
+  --shadow-sm: 0 2px 8px rgba(33, 27, 22, 0.08);
+  --shadow-md: 0 6px 18px rgba(33, 27, 22, 0.12);
+  --shadow-lg: 0 14px 32px rgba(33, 27, 22, 0.18);
+  --shadow-xl: 0 24px 48px rgba(20, 16, 12, 0.22);
+
+  /* Motion -------------------------------------------------------------- */
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 280ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Layout -------------------------------------------------------------- */
+  --container-max: 1520px;
+  --portal-max: 1380px;
+  --header-pad-y: var(--space-6);
+  --header-pad-x: var(--space-7);
+
+  /* Focus rings --------------------------------------------------------- */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--accent-ring);
+
+  font-family: var(--font-sans);
+  line-height: var(--lh-base);
 }
 
 * {
@@ -39,6 +147,9 @@ body {
     linear-gradient(180deg, rgba(52, 40, 32, 0.06), rgba(52, 40, 32, 0)),
     linear-gradient(135deg, var(--bg), #fbf7f0);
   color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -46,10 +157,20 @@ input,
 select,
 textarea {
   font: inherit;
+  color: inherit;
 }
 
 a {
   color: var(--accent);
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+a:active {
+  color: var(--accent-active);
 }
 
 button {
@@ -63,13 +184,43 @@ textarea:disabled {
   cursor: not-allowed;
 }
 
+::selection {
+  background: var(--accent-ring);
+  color: var(--ink);
+}
+
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-.btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.btn:focus-visible,
+[role="tab"]:focus-visible,
+[role="button"]:focus-visible {
+  outline: var(--focus-ring-width) solid var(--accent);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-sm);
 }
 
+/* Scrollbars (webkit) -------------------------------------------------- */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--line-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}

@@ -703,18 +703,38 @@ export default function App() {
 
           <div className="upload-grid">
             {accessState.status === "checking" ? (
-              <div className="empty-state">Verification du lien securise...</div>
+              <div className="empty-state empty-state--loading">
+                <div>
+                  <span className="empty-state__title">Verification</span>
+                  <span className="spinner spinner--inline" aria-hidden="true" />
+                  Controle du lien securise en cours.
+                </div>
+              </div>
             ) : accessState.status === "blocked" ? (
-              <div className="empty-state">
-                Acces securise requis avant affichage des pieces.
+              <div className="empty-state empty-state--error">
+                <div>
+                  <span className="empty-state__title">Acces refuse</span>
+                  Acces securise requis avant affichage des pieces.
+                </div>
               </div>
             ) : pageState === "loading" ? (
-              <div className="empty-state">Chargement des pieces...</div>
+              <div className="empty-state empty-state--loading">
+                <div>
+                  <span className="empty-state__title">Chargement</span>
+                  <span className="spinner spinner--inline" aria-hidden="true" />
+                  Recuperation des pieces du dossier.
+                </div>
+              </div>
             ) : visibleItems.length === 0 ? (
               <div className="empty-state">
-                {activeTab === "pending"
-                  ? "Toutes les pieces attendues ont ete deposees."
-                  : "Aucune piece deposee pour le moment."}
+                <div>
+                  <span className="empty-state__title">
+                    {activeTab === "pending" ? "Tout est depose" : "Aucun depot"}
+                  </span>
+                  {activeTab === "pending"
+                    ? "Toutes les pieces attendues ont ete deposees."
+                    : "Aucune piece deposee pour le moment."}
+                </div>
               </div>
             ) : (
               visibleItems.map((item, index) => {

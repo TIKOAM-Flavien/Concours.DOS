@@ -1,44 +1,50 @@
+/* =============================================================================
+ * Portal (entreprise depot UI)
+ * ========================================================================== */
+
 .portal {
   min-height: 100vh;
-  max-width: 1380px;
+  max-width: var(--portal-max);
   margin: 0 auto;
-  padding: 24px 32px 28px;
+  padding: var(--space-6) var(--space-8) var(--space-7);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
+/* ---------------------------------------------------------------------------
+ * Header
+ * ------------------------------------------------------------------------- */
 .portal-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 20px;
-  padding: 24px 28px;
+  gap: var(--space-5);
+  padding: var(--header-pad-y) var(--header-pad-x);
   border: 1px solid var(--accent-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
     var(--accent-strong);
   color: #f8fbff;
+  box-shadow: var(--shadow-md);
 }
 
 .portal-header__left {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
-
-
 .portal-brand {
-  font-size: 0.72rem;
-  font-weight: 700;
-  opacity: 0.75;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  opacity: 0.78;
 }
 
 .portal-title {
   margin: 0;
-  font-family: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.7rem, 2.4vw, 2.4rem);
   line-height: 1.05;
   letter-spacing: 0.01em;
@@ -47,14 +53,15 @@
 .portal-header__copy {
   max-width: 60ch;
   margin: 0;
-  font-size: 0.95rem;
-  color: rgba(248, 251, 255, 0.8);
+  font-size: var(--fs-md);
+  color: rgba(248, 251, 255, 0.82);
+  line-height: var(--lh-base);
 }
 
 .portal-header__right {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: var(--space-3);
   align-content: start;
 }
 
@@ -62,99 +69,31 @@
 .portal-progress {
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.04);
-  padding: 14px 16px;
-}
-
-.security-chip {
-  display: inline-flex;
-  margin-top: 8px;
-  padding: 6px 10px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: #fff;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.security-chip--success {
-  background: rgba(83, 103, 122, 0.24);
-  border-color: rgba(187, 199, 211, 0.34);
-}
-
-.security-chip--warning {
-  background: rgba(138, 90, 17, 0.28);
-  border-color: rgba(255, 220, 169, 0.3);
-}
-
-.security-chip--error {
-  background: rgba(150, 45, 45, 0.28);
-  border-color: rgba(255, 186, 186, 0.28);
-}
-
-.portal--admin-ui .summary-card .security-chip {
-  color: var(--ink);
-}
-
-.portal--admin-ui .summary-card .security-chip--success {
-  background: var(--success-soft);
-  border-color: #b7c3ce;
-  color: var(--success);
-}
-
-.portal--admin-ui .summary-card .security-chip--warning {
-  background: var(--warning-soft);
-  border-color: #d9c9a3;
-  color: var(--warning);
-}
-
-.portal--admin-ui .summary-card .security-chip--error {
-  background: var(--danger-soft);
-  border-color: #d9b4b4;
-  color: var(--danger);
-}
-
-.admin-panel .security-chip {
-  color: var(--ink);
-}
-
-.admin-panel .security-chip--success {
-  background: var(--success-soft);
-  border-color: #b7c3ce;
-  color: var(--success);
-}
-
-.admin-panel .security-chip--warning {
-  background: var(--warning-soft);
-  border-color: #d9c9a3;
-  color: var(--warning);
-}
-
-.admin-panel .security-chip--error {
-  background: var(--danger-soft);
-  border-color: #d9b4b4;
-  color: var(--danger);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
 }
 
 .portal-progress__value {
   display: block;
   margin-top: 6px;
-  font-size: 1.85rem;
-  line-height: 1;
-  font-weight: 700;
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-tight);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
 }
 
 .portal-progress__meta {
   display: block;
-  margin-top: 8px;
-  color: rgba(248, 251, 255, 0.76);
+  margin-top: var(--space-2);
+  color: rgba(248, 251, 255, 0.78);
   font-size: 0.84rem;
 }
 
 .portal-progress__bar {
   height: 8px;
-  margin-top: 14px;
+  margin-top: var(--space-3);
   background: rgba(255, 255, 255, 0.14);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   overflow: hidden;
 }
 
@@ -162,7 +101,7 @@
   display: block;
   height: 100%;
   background: linear-gradient(90deg, #8b6249, #d8b98d);
-  transition: width 0.25s ease;
+  transition: width var(--motion-slow) var(--ease-out);
 }
 
 .portal-progress-card .portal-progress__meta {
@@ -175,7 +114,7 @@
 
 .portal-summary-grid .summary-card__kpi-hint {
   border-top: 1px solid rgba(214, 202, 190, 0.85);
-  padding-top: 12px;
+  padding-top: var(--space-3);
 }
 
 .portal-main__header {
@@ -187,14 +126,18 @@
   flex: 0 0 auto;
 }
 
+/* ---------------------------------------------------------------------------
+ * Company info panel
+ * ------------------------------------------------------------------------- */
 .company-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
-  padding: 22px 24px;
+  gap: var(--space-5);
+  padding: var(--space-6);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--surface-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .company-panel__main {
@@ -202,15 +145,15 @@
 }
 
 .section-kicker {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
   font-size: 0.74rem;
   color: var(--muted);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
 }
 
 .company-panel__name {
   margin: 0;
-  font-family: "Bahnschrift", "Aptos Display", "Segoe UI", sans-serif;
+  font-family: var(--font-display);
   font-size: clamp(1.4rem, 2vw, 2rem);
   line-height: 1.08;
   letter-spacing: 0.01em;
@@ -218,66 +161,73 @@
 
 .company-panel__subtitle {
   margin: 6px 0 0;
-  font-size: 0.82rem;
+  font-size: var(--fs-sm);
   color: var(--muted);
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .company-panel__subtitle span {
   color: var(--ink);
-  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   text-transform: none;
   letter-spacing: 0;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   margin-left: 4px;
 }
 
 .company-panel__summary {
-  margin: 10px 0 0;
+  margin: var(--space-3) 0 0;
   max-width: 70ch;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
 }
 
 .company-facts {
-  margin: 18px 0 0;
+  margin: var(--space-5) 0 0;
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .company-fact {
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
   border-left: 4px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  transition: border-left-color var(--motion-base) var(--ease-out);
+}
+
+.company-fact:hover {
+  border-left-color: var(--accent);
 }
 
 .company-fact dt {
   font-size: 0.68rem;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   color: var(--muted);
 }
 
 .company-fact dd {
-  margin: 8px 0 0;
-  font-size: 0.95rem;
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-md);
   line-height: 1.4;
   word-break: break-word;
 }
 
 .company-fact a {
   text-decoration: none;
+  transition: color var(--motion-fast) var(--ease-out);
 }
 
 .company-fact a:hover {
   text-decoration: underline;
+  color: var(--accent-hover);
 }
-
 
 .portal-content {
   min-height: 0;
@@ -285,48 +235,60 @@
 
 .portal-main {
   min-height: 0;
-  padding: 18px 20px 22px;
+  padding: var(--space-5);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--surface-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .portal-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-bottom: 18px;
-  padding-bottom: 16px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-4);
   border-bottom: 1px solid var(--line);
 }
 
+/* ---------------------------------------------------------------------------
+ * Category strip (filters)
+ * ------------------------------------------------------------------------- */
 .category-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .cat-item {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: var(--ink);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  transition:
+    border-color var(--motion-base) var(--ease-out),
+    background var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out);
 }
 
 .cat-item:hover {
-  border-color: var(--line-strong);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.cat-item:active {
+  background: #e6d3bf;
 }
 
 .cat-item--active,
 .cat-item--active:hover {
   background: var(--ink);
-  color: #fff;
+  color: var(--on-accent);
   border-color: var(--ink);
 }
 
@@ -336,32 +298,46 @@
 
 .cat-item__count {
   min-width: 24px;
-  padding: 1px 5px;
+  padding: 1px 6px;
   border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
+/* ---------------------------------------------------------------------------
+ * Documents grid
+ * ------------------------------------------------------------------------- */
 .upload-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
   align-content: start;
 }
 
 .doc-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-4);
   min-height: 100%;
-  padding: 16px;
+  padding: var(--space-4);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--surface);
   position: relative;
-  animation: reveal-up 0.26s ease both;
+  animation: reveal-up 0.26s var(--ease-out) both;
   animation-delay: var(--delay, 0ms);
+  transition:
+    border-color var(--motion-base) var(--ease-out),
+    box-shadow var(--motion-base) var(--ease-out),
+    transform var(--motion-base) var(--ease-out);
+}
+
+.doc-card:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 .doc-card::before {
@@ -372,6 +348,8 @@
   right: -1px;
   height: 4px;
   background: var(--card-accent, var(--accent));
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
 }
 
 .doc-card--done {
@@ -386,18 +364,20 @@
 .doc-card__eyebrow {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
 }
 
 .doc-flag {
   display: inline-flex;
-  padding: 4px 8px;
+  align-items: center;
+  padding: 4px var(--space-2);
   border: 1px solid #c8cdd2;
   background: #eceff2;
   color: #6b7280;
   font-size: 0.68rem;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
+  border-radius: var(--radius-pill);
 }
 
 .doc-flag--done {
@@ -435,7 +415,7 @@
 
 .doc-card__category {
   font-size: 0.68rem;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   color: var(--muted);
 }
 
@@ -450,24 +430,24 @@
 }
 
 .doc-card__label {
-  font-size: 1rem;
+  font-size: var(--fs-base);
   line-height: 1.25;
 }
 
 .doc-card__summary {
   font-size: 0.84rem;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: var(--lh-base);
 }
 
 .doc-card__details {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-3);
 }
 
 .doc-card__details div {
-  padding: 10px 11px;
+  padding: var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface-strong);
@@ -479,7 +459,7 @@
 
 .doc-card__details dt {
   font-size: 0.66rem;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   color: var(--muted);
 }
 
@@ -494,6 +474,5 @@
   margin-top: auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
-

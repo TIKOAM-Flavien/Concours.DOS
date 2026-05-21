@@ -74,7 +74,7 @@ export default function CompanyModal({
               Nouvelle entreprise
             </button>
             <button type="button" className="modal-close" onClick={onClose} aria-label="Fermer">
-              x
+              &times;
             </button>
           </div>
         </header>
@@ -243,7 +243,11 @@ export default function CompanyModal({
               </div>
               <div className="admin-documents__list">
                 {companyDocumentGroups.length === 0 ? (
-                  <p className="admin-documents__empty">Aucune piece ne correspond a la recherche.</p>
+                  <p className="admin-documents__empty">
+                    {companyDocumentSearch.trim()
+                      ? "Aucune piece ne correspond a la recherche."
+                      : "Aucune piece disponible."}
+                  </p>
                 ) : (
                   companyDocumentGroups.map((group) => {
                     const groupIds = group.items.map((doc) => doc.id);
@@ -330,8 +334,16 @@ export default function CompanyModal({
               companySaveStatus.phase === "saved" ? "btn btn--success" : "btn btn--primary"
             }
             disabled={companySaveStatus.phase === "saving"}
+            aria-busy={companySaveStatus.phase === "saving"}
           >
-            {submitButtonLabel({ companyForm, companySaveStatus })}
+            {companySaveStatus.phase === "saving" ? (
+              <>
+                <span className="spinner spinner--sm" aria-hidden="true" />
+                {submitButtonLabel({ companyForm, companySaveStatus })}
+              </>
+            ) : (
+              submitButtonLabel({ companyForm, companySaveStatus })
+            )}
           </button>
         </footer>
       </div>

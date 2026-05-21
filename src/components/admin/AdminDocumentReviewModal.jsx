@@ -131,7 +131,10 @@ export default function AdminDocumentReviewModal({
           <div className="admin-document-review__preview-wrap">
             <div className="admin-document-review__preview">
             {loading ? (
-              <div className="modal-placeholder">Chargement du fichier...</div>
+              <div className="modal-placeholder">
+                <span className="spinner spinner--inline" aria-hidden="true" />
+                Chargement du fichier...
+              </div>
             ) : error ? (
               <div className="modal-placeholder modal-placeholder--error">{error}</div>
             ) : isImage && blobUrl ? (
@@ -148,14 +151,16 @@ export default function AdminDocumentReviewModal({
               />
             ) : (
               <div className="modal-placeholder">
-                Apercu indisponible pour ce format.
-                {blobUrl ? (
-                  <p style={{ marginTop: 12 }}>
-                    <a href={blobUrl} target="_blank" rel="noreferrer">
-                      Ouvrir le fichier
-                    </a>
-                  </p>
-                ) : null}
+                <div>
+                  Apercu indisponible pour ce format.
+                  {blobUrl ? (
+                    <p style={{ marginTop: 12 }}>
+                      <a href={blobUrl} target="_blank" rel="noreferrer">
+                        Ouvrir le fichier
+                      </a>
+                    </p>
+                  ) : null}
+                </div>
               </div>
             )}
             </div>
@@ -184,8 +189,20 @@ export default function AdminDocumentReviewModal({
             className="btn btn--danger-sm"
             onClick={handleRejectClick}
             disabled={saving || loading || Boolean(error && !blobUrl)}
+            aria-busy={saving && showRejectComment}
           >
-            {showRejectComment ? (saving ? "Refus..." : "Confirmer le refus") : "Refuser"}
+            {showRejectComment ? (
+              saving ? (
+                <>
+                  <span className="spinner spinner--sm" aria-hidden="true" />
+                  Refus...
+                </>
+              ) : (
+                "Confirmer le refus"
+              )
+            ) : (
+              "Refuser"
+            )}
           </button>
           {!showRejectComment ? (
             <button
@@ -193,8 +210,16 @@ export default function AdminDocumentReviewModal({
               className="btn btn--primary"
               onClick={() => onAccept("")}
               disabled={saving || loading || Boolean(error && !blobUrl)}
+              aria-busy={saving}
             >
-              {saving ? "Validation..." : "Accepter"}
+              {saving ? (
+                <>
+                  <span className="spinner spinner--sm" aria-hidden="true" />
+                  Validation...
+                </>
+              ) : (
+                "Accepter"
+              )}
             </button>
           ) : null}
         </footer>

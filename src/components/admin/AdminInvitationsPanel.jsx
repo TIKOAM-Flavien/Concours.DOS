@@ -100,10 +100,18 @@ export default function AdminInvitationsPanel({
 
       {!selectedProject ? (
         <div className="empty-state admin-empty">
-          Creez ou ouvrez un projet pour rattacher des entreprises.
+          <div>
+            <span className="empty-state__title">Aucun projet</span>
+            Creez ou ouvrez un projet pour rattacher des entreprises.
+          </div>
         </div>
       ) : !companies.length ? (
-        <div className="empty-state admin-empty">Aucune entreprise rattachee a ce projet.</div>
+        <div className="empty-state admin-empty">
+          <div>
+            <span className="empty-state__title">Aucune entreprise</span>
+            Aucune entreprise rattachee a ce projet.
+          </div>
+        </div>
       ) : (
         <div className="table-wrap">
           <table className="data-table">

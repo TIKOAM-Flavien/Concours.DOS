@@ -6,7 +6,6 @@ export default function AdminHistoryPanel({
   activityItems = [],
   activityLoading = false,
   activityError = "",
-  onRefreshActivity,
 }) {
   const count = activityItems.length;
 
@@ -25,30 +24,37 @@ export default function AdminHistoryPanel({
             {selectedProject?.dossierId || "Aucun dossier"}
             {selectedProject ? ` · ${count} evenement${count > 1 ? "s" : ""}` : ""}
           </span>
-          {selectedProject && onRefreshActivity ? (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
-              onClick={onRefreshActivity}
-              disabled={activityLoading}
-            >
-              {activityLoading ? "Chargement…" : "Actualiser"}
-            </button>
-          ) : null}
         </div>
       </div>
 
       {!selectedProject ? (
         <div className="empty-state admin-empty">
-          Ouvrez un projet pour consulter le journal complet.
+          <div>
+            <span className="empty-state__title">Aucun projet</span>
+            Ouvrez un projet pour consulter le journal complet.
+          </div>
         </div>
       ) : activityError ? (
-        <div className="empty-state admin-empty admin-empty--error">{activityError}</div>
+        <div className="empty-state admin-empty admin-empty--error">
+          <div>
+            <span className="empty-state__title">Erreur</span>
+            {activityError}
+          </div>
+        </div>
       ) : activityLoading && !count ? (
-        <div className="empty-state admin-empty">Chargement du journal…</div>
+        <div className="empty-state admin-empty empty-state--loading">
+          <div>
+            <span className="empty-state__title">Chargement</span>
+            <span className="spinner spinner--inline" aria-hidden="true" />
+            Lecture du journal en cours...
+          </div>
+        </div>
       ) : !count ? (
         <div className="empty-state admin-empty">
-          Aucune action enregistree pour ce projet.
+          <div>
+            <span className="empty-state__title">Aucune activite</span>
+            Aucune action enregistree pour ce projet.
+          </div>
         </div>
       ) : (
         <div className="table-wrap">

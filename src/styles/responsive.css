@@ -1,10 +1,35 @@
-@media (max-width: 1080px) {
-  .portal {
-    padding: 18px 20px 22px;
+/* =============================================================================
+ * Responsive overrides
+ *
+ *  - 1280px  : compact desktop  (narrower paddings, KPI to 4 cols)
+ *  - 1080px  : tablet           (collapse 2-column layouts to 1)
+ *  -  760px  : mobile           (single column, full-width controls)
+ *  -  420px  : narrow mobile    (tighter padding, edge-to-edge cards)
+ * ========================================================================== */
+
+@media (max-width: 1280px) {
+  .portal,
+  .admin-shell {
+    padding: var(--space-5) var(--space-6) var(--space-6);
   }
 
+  .admin-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .admin-tracking-toolbar {
+    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-tracking-toolbar > .field:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1080px) {
+  .portal,
   .admin-shell {
-    padding: 18px 20px 22px;
+    padding: var(--space-5) var(--space-5) var(--space-6);
   }
 
   .portal-header,
@@ -31,6 +56,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .admin-tracking-toolbar > .field:first-child {
+    grid-column: 1 / -1;
+  }
+
   .admin-header__status {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -44,18 +73,22 @@
   }
 
   .admin-form--split .admin-documents__list {
-    max-height: 300px;
+    max-height: 320px;
     flex: 0 0 auto;
+  }
+
+  .admin-overview__grid,
+  .admin-tracking-grid,
+  .upload-grid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   }
 }
 
 @media (max-width: 760px) {
-  .portal {
-    padding: 14px;
-  }
-
+  .portal,
   .admin-shell {
-    padding: 14px;
+    padding: var(--space-4);
+    gap: var(--space-3);
   }
 
   .portal-header,
@@ -63,17 +96,21 @@
   .portal-main,
   .admin-header,
   .admin-panel {
-    padding: 16px;
+    padding: var(--space-4);
+  }
+
+  .admin-header {
+    padding-top: 56px;
   }
 
   .admin-header__session {
-    top: 16px;
-    right: 16px;
+    top: var(--space-4);
+    right: var(--space-4);
   }
 
   .admin-header__main {
     padding-right: 0;
-    padding-top: 52px;
+    padding-top: 0;
   }
 
   .portal-header__right,
@@ -87,6 +124,10 @@
   .admin-tracking-toolbar,
   .admin-tracking-summary {
     grid-template-columns: 1fr;
+  }
+
+  .admin-overview__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .company-facts {
@@ -107,14 +148,23 @@
     align-items: stretch;
   }
 
+  .admin-panel__header-actions {
+    align-items: stretch;
+  }
+
   .admin-inline-actions {
     width: 100%;
+  }
+
+  .admin-inline-actions--tracking {
+    flex-wrap: wrap;
   }
 
   .admin-inline-actions > .btn,
   .admin-form__actions > .btn,
   .modal-footer > .btn {
     flex: 1 1 auto;
+    min-height: 44px;
   }
 
   .data-table td .admin-inline-actions {
@@ -147,13 +197,14 @@
   }
 
   .modal-backdrop {
-    padding: 10px;
+    padding: var(--space-3);
     place-items: stretch;
   }
 
   .modal-panel {
     width: 100%;
-    max-height: calc(100vh - 20px);
+    max-height: calc(100vh - 24px);
+    border-radius: var(--radius);
   }
 
   .modal-header {
@@ -199,19 +250,96 @@
 
   .tab {
     flex: 1 1 0;
-    padding-inline: 10px;
+    padding-inline: var(--space-3);
+    min-height: 44px;
+  }
+
+  .cat-item {
+    min-height: 38px;
   }
 
   .upload-grid {
     grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .doc-card {
+    padding: var(--space-3);
+  }
+
+  .doc-card__actions .btn {
+    flex: 1 1 auto;
+    min-height: 44px;
   }
 
   .portal-footer {
     flex-direction: column;
     align-items: flex-start;
+    gap: var(--space-3);
+  }
+
+  .admin-overview__filters {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    margin-inline: calc(-1 * var(--space-4));
+    padding-inline: var(--space-4);
+    scrollbar-width: none;
+  }
+
+  .admin-overview__filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .admin-overview__chip {
+    flex: 0 0 auto;
   }
 }
 
+@media (max-width: 420px) {
+  .portal,
+  .admin-shell {
+    padding: var(--space-3);
+  }
+
+  .portal-header,
+  .company-panel,
+  .portal-main,
+  .admin-header,
+  .admin-panel {
+    padding: var(--space-3);
+    border-radius: var(--radius);
+  }
+
+  .admin-summary-grid > .summary-card--admin-kpi {
+    min-height: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .summary-card__kpi-number {
+    font-size: 1.65rem;
+  }
+
+  .modal-header {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .modal-body--padded {
+    padding: var(--space-4) var(--space-4) var(--space-1);
+  }
+
+  .modal-footer {
+    padding: var(--space-3) var(--space-4);
+    flex-wrap: wrap;
+  }
+
+  .admin-tracking-action-btn--invitations,
+  .admin-tracking-action-btn--reminders {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* Reduce motion: honour user preference everywhere -------------------- */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -222,4 +350,3 @@
     transition-duration: 0.01ms !important;
   }
 }
-

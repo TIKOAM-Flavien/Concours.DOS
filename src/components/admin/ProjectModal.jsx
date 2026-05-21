@@ -43,7 +43,7 @@ export default function ProjectModal({
               Nouveau projet
             </button>
             <button type="button" className="modal-close" onClick={onClose} aria-label="Fermer">
-              x
+              &times;
             </button>
           </div>
         </header>
@@ -116,7 +116,12 @@ export default function ProjectModal({
               <span>Afficher les projets archives</span>
             </label>
             {!projects.length ? (
-              <div className="empty-state admin-empty">Aucun projet configure.</div>
+              <div className="empty-state admin-empty">
+                <div>
+                  <span className="empty-state__title">Aucun projet</span>
+                  Aucun projet configure.
+                </div>
+              </div>
             ) : (
               projects.map((project) => {
                 const isArchived = Boolean(project.archivedAt);

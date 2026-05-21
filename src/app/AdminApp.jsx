@@ -160,7 +160,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
     setTrackingOnlyMissing,
     trackingView,
     setTrackingView,
-    trackingManualBusy,
     hasTrackingFilters,
     refreshTrackingManual,
     resetTrackingFilters,
@@ -176,7 +175,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
     items: projectActivityItems,
     loading: projectActivityLoading,
     error: projectActivityError,
-    reload: reloadProjectActivity,
   } = useAdminProjectActivity({
     projectId: selectedProject?.id || "",
     refreshKey: trackingRefreshKey,
@@ -361,11 +359,14 @@ function AdminAppDashboard({ authSession, onLogout }) {
 
   if (dbLoading) {
     return (
-      <div
-        className="admin-shell"
-        style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}
-      >
-        <p>Chargement depuis la base de donnees...</p>
+      <div className="admin-shell">
+        <div className="empty-state empty-state--loading" style={{ minHeight: "60vh" }}>
+          <div>
+            <span className="empty-state__title">Chargement</span>
+            <span className="spinner spinner--inline" aria-hidden="true" />
+            Chargement depuis la base de donnees...
+          </div>
+        </div>
       </div>
     );
   }
@@ -444,7 +445,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
             overviewSummary={overviewSummary}
             filteredOverviewItems={filteredOverviewItems}
             selectedProjectId={selectedProjectId}
-            onRefresh={refreshOverview}
             onToggleVisible={() => setOverviewVisible((current) => !current)}
             onFilterChange={setOverviewFilter}
             onSwitchProject={handleSwitchProject}
@@ -467,7 +467,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
 
           <AdminTrackingPanel
             selectedProject={selectedProject}
-            documentsEnabled={Boolean(signingState.flows.documentsEnabled)}
             secureLinkEnabled={secureLinkEnabled}
             sendInvitationsEnabled={Boolean(signingState.flows.sendInvitationsEnabled)}
             sendRemindersEnabled={Boolean(signingState.flows.sendRemindersEnabled)}
@@ -490,11 +489,9 @@ function AdminAppDashboard({ authSession, onLogout }) {
             trackingView={trackingView}
             onTrackingViewChange={setTrackingView}
             hasTrackingFilters={hasTrackingFilters}
-            trackingManualBusy={trackingManualBusy}
             invitationStatusByCompanyId={invitationStatusByCompanyId}
             onSendInvitations={handleSendInvitations}
             onSendReminders={handleSendReminders}
-            onRefreshTracking={refreshTrackingManual}
             onResetFilters={resetTrackingFilters}
             onOpenDocumentReview={openDocumentReview}
           />
@@ -504,7 +501,6 @@ function AdminAppDashboard({ authSession, onLogout }) {
             activityItems={projectActivityItems}
             activityLoading={projectActivityLoading}
             activityError={projectActivityError}
-            onRefreshActivity={reloadProjectActivity}
           />
         </div>
       </main>
@@ -628,7 +624,22 @@ export default function AdminApp() {
   if (authState.status === "loading") {
     return (
       <div className="admin-login-shell">
-        <p>Verification de la session...</p>
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "0.75rem 1.25rem",
+            borderRadius: 999,
+            background: "rgba(255, 255, 255, 0.08)",
+            border: "1px solid rgba(255, 255, 255, 0.18)",
+            color: "rgba(248, 251, 255, 0.85)",
+            fontSize: "0.92rem",
+          }}
+        >
+          <span className="spinner spinner--sm" aria-hidden="true" />
+          Verification de la session...
+        </div>
       </div>
     );
   }

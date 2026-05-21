@@ -42,7 +42,6 @@ function TrackingInvitationBadges({ invitation }) {
 
 export default function AdminTrackingPanel({
   selectedProject,
-  documentsEnabled,
   secureLinkEnabled,
   sendInvitationsEnabled,
   sendRemindersEnabled,
@@ -65,11 +64,9 @@ export default function AdminTrackingPanel({
   trackingView,
   onTrackingViewChange,
   hasTrackingFilters,
-  trackingManualBusy,
   invitationStatusByCompanyId,
   onSendInvitations,
   onSendReminders,
-  onRefreshTracking,
   onResetFilters,
   onOpenDocumentReview,
 }) {
@@ -131,24 +128,6 @@ export default function AdminTrackingPanel({
           >
             <span className="admin-tracking-action-btn__label">Envoyer relances</span>
           </button>
-          <button
-            type="button"
-            className={`btn btn--ghost admin-tracking-action-btn admin-tracking-action-btn--refresh${
-              trackingManualBusy ? " btn--busy" : ""
-            }`}
-            disabled={!selectedProject || trackingManualBusy || !documentsEnabled}
-            onClick={onRefreshTracking}
-            aria-busy={trackingManualBusy}
-            title={
-              !documentsEnabled
-                ? "Stockage local indisponible."
-                : trackingManualBusy
-                  ? "Actualisation en cours."
-                  : "Recharge l'etat local du projet actif."
-            }
-          >
-            <span className="admin-tracking-action-btn__label">Actualiser</span>
-          </button>
         </div>
       </div>
 
@@ -160,11 +139,17 @@ export default function AdminTrackingPanel({
 
       {!selectedProject ? (
         <div className="empty-state admin-empty">
-          Selectionnez un projet pour visualiser le suivi multi-entreprises.
+          <div>
+            <span className="empty-state__title">Aucun projet</span>
+            Selectionnez un projet pour visualiser le suivi multi-entreprises.
+          </div>
         </div>
       ) : !companyTracking.length ? (
         <div className="empty-state admin-empty">
-          Aucune entreprise configuree pour etablir le suivi de reception.
+          <div>
+            <span className="empty-state__title">Aucune entreprise</span>
+            Aucune entreprise configuree pour etablir le suivi de reception.
+          </div>
         </div>
       ) : (
         <>
@@ -279,7 +264,12 @@ export default function AdminTrackingPanel({
           </div>
 
           {!filteredCompanyTracking.length ? (
-            <div className="empty-state admin-empty">Aucun resultat avec les filtres actifs.</div>
+            <div className="empty-state admin-empty">
+              <div>
+                <span className="empty-state__title">Aucun resultat</span>
+                Aucun resultat avec les filtres actifs.
+              </div>
+            </div>
           ) : trackingView === "cards" ? (
             <div className="admin-tracking-grid">
               {filteredCompanyTracking.map((company) => (

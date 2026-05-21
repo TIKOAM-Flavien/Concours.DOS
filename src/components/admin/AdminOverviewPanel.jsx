@@ -11,7 +11,6 @@ export default function AdminOverviewPanel({
   overviewSummary,
   filteredOverviewItems,
   selectedProjectId,
-  onRefresh,
   onToggleVisible,
   onFilterChange,
   onSwitchProject,
@@ -33,18 +32,10 @@ export default function AdminOverviewPanel({
               ? "Vue d'ensemble degradee : stockage local indisponible."
               : overviewState.generatedAt
               ? `Mise a jour : ${formatDateTime(overviewState.generatedAt)}`
-              : "Cliquez sur Actualiser pour charger l'etat des projets."}
+              : "Etat des projets en cours de chargement."}
           </p>
         </div>
         <div className="admin-inline-actions">
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onRefresh}
-            disabled={!overviewVisible || overviewState.status === "loading"}
-          >
-            {overviewState.status === "loading" ? "Actualisation..." : "Actualiser"}
-          </button>
           <button
             type="button"
             className="btn btn--ghost"
@@ -122,13 +113,29 @@ export default function AdminOverviewPanel({
           ) : null}
 
           {!overviewItems.length ? (
-            <div className="empty-state admin-empty">
-              {overviewState.status === "loading"
-                ? "Chargement de l'etat des projets..."
-                : "Aucun projet a afficher."}
-            </div>
+            overviewState.status === "loading" ? (
+              <div className="empty-state admin-empty empty-state--loading">
+                <div>
+                  <span className="empty-state__title">Chargement</span>
+                  <span className="spinner spinner--inline" aria-hidden="true" />
+                  Chargement de l'etat des projets...
+                </div>
+              </div>
+            ) : (
+              <div className="empty-state admin-empty">
+                <div>
+                  <span className="empty-state__title">Aucun projet</span>
+                  Aucun projet a afficher.
+                </div>
+              </div>
+            )
           ) : !filteredOverviewItems.length ? (
-            <div className="empty-state admin-empty">Aucun projet ne correspond a ce filtre.</div>
+            <div className="empty-state admin-empty">
+              <div>
+                <span className="empty-state__title">Aucun resultat</span>
+                Aucun projet ne correspond a ce filtre.
+              </div>
+            </div>
           ) : (
             <div className="admin-overview__grid">
               {filteredOverviewItems.map((item) => {

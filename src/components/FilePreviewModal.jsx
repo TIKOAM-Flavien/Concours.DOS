@@ -58,7 +58,10 @@ export default function FilePreviewModal({
 
         <div className="modal-body">
           {loading ? (
-            <div className="modal-placeholder">Chargement...</div>
+            <div className="modal-placeholder">
+              <span className="spinner spinner--inline" aria-hidden="true" />
+              Chargement du fichier...
+            </div>
           ) : error ? (
             <div className="modal-placeholder modal-placeholder--error">
               {error}
@@ -77,14 +80,16 @@ export default function FilePreviewModal({
             />
           ) : (
             <div className="modal-placeholder">
-              Apercu securise indisponible pour ce format.
-              {blobUrl ? (
-                <p style={{ marginTop: 12 }}>
-                  <a href={blobUrl} target="_blank" rel="noreferrer">
-                    Ouvrir le fichier
-                  </a>
-                </p>
-              ) : null}
+              <div>
+                Apercu securise indisponible pour ce format.
+                {blobUrl ? (
+                  <p style={{ marginTop: 12 }}>
+                    <a href={blobUrl} target="_blank" rel="noreferrer">
+                      Ouvrir le fichier
+                    </a>
+                  </p>
+                ) : null}
+              </div>
             </div>
           )}
         </div>

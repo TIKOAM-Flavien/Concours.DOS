@@ -72,8 +72,20 @@ export default function AdminLogin({ onSuccess, error: externalError = "" }) {
 
           {displayError ? <p className="admin-login-form__error">{displayError}</p> : null}
 
-          <button type="submit" className="btn btn--primary admin-login-form__submit" disabled={submitting}>
-            {submitting ? "Connexion..." : "Se connecter"}
+          <button
+            type="submit"
+            className="btn btn--primary admin-login-form__submit"
+            disabled={submitting}
+            aria-busy={submitting}
+          >
+            {submitting ? (
+              <>
+                <span className="spinner spinner--sm" aria-hidden="true" />
+                Connexion...
+              </>
+            ) : (
+              "Se connecter"
+            )}
           </button>
         </form>
 
